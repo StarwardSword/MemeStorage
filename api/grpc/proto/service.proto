@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package api;
+
+service MemeStorage {
+    rpc Save(stream SaveRequest) returns (SaveResponse);
+    rpc GetFile(UUIDRequest) returns (stream DownloadResponse);
+    rpc GetByEmbeddings(EmbeddingRequest) returns (MultipleIdResponse);
+    rpc GetByQuery(QueryRequest) returns (MultipleIdResponse);
+}
+
+
+message Embbedings {
+    repeated float value = 1;
+}
+
+// Save
+message SaveFileInfo {
+    string filename = 1;
+    optional string content_type = 2;
+    optional Embbedings embeddings = 3;
+    optional string text_description = 4;
+    optional Embbedings text_embeddings = 5;
+}
+
+message SaveRequest {
+    oneof payload {
+        SaveFileInfo info = 1;
+        bytes data = 2;
+    }
+}
+
+message SaveResponse {
+    string uuid = 1;
+}
+
+
+// GetFile
+message UUIDRequest {
+    string uuid = 1;
+}
+
+message DownloadFileInfo {
+    string content_type = 1;
+    string original_name = 2;
+    int32 size = 3;
+}
+
+message DownloadResponse {
+    oneof payload {
+        DownloadFileInfo info = 1;
+        bytes chunk = 2;
+    }
+}
+
+
+// Embeddings, Queries and so on
+
+message EmbeddingRequest {
+    repeated Embbedings embeddings = 1;
+    int32 record_count = 2;
+}
+
+message QueryRequest {
+    repeated string queries = 1;
+    int32 record_count = 2;
+}
+
+message MultipleIds {
+    repeated string ids = 1;
+}
+
+message MultipleIdResponse {
+    repeated MultipleIds result = 1;
+}
