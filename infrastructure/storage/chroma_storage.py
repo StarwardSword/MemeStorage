@@ -14,6 +14,9 @@ class ChromaStorage(Storage):
         )
 
     def save(self, records: list[Record]) -> None:
+        # Chroma refuses empty add, a batch where every file failed comes here empty
+        if not records:
+            return
         if any([x for x in records if x.embedding is None]):
             raise ValueError(
                 f"ChromaStorage.save got record with primary embeddings None"

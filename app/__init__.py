@@ -1,4 +1,4 @@
-from .application import Application, NegativeRecordCount
+from .application import Application, NegativeRecordCount, SaveMessage
 from .embeddings import (
     EmbeddingProvider,
     Embeddings,
@@ -22,4 +22,5 @@ __all__ = [
     "UnsupportedTypeError",
     "WrongEmbeddingsError",
     "NegativeRecordCount",
+    "SaveMessage",
 ]

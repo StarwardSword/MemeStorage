@@ -9,6 +9,12 @@ service MemeStorage {
     //   embeddings dimension does not match the model
     rpc Save(stream SaveRequest) returns (SaveResponse);
 
+    // Each info message starts a new file, data messages after it are its contents.
+    // A file that can not be saved, including an unsupported content type, goes to failed
+    //   instead of failing the call.
+    // INVALID_ARGUMENT: first message is not info
+    rpc SaveMultiple(stream SaveMultipleRequest) returns (SaveMultipleResponse);
+
     // INVALID_ARGUMENT: uuid is malformed
     // NOT_FOUND: there is no file with this uuid
     rpc GetFile(UUIDRequest) returns (stream DownloadResponse);
@@ -47,6 +53,25 @@ message SaveRequest {
 
 message SaveResponse {
     string uuid = 1;
+}
+
+
+// SaveMultiple
+message SaveMultipleFileInfo {
+    string filename = 1;
+    optional string content_type = 2;
+}
+
+message SaveMultipleRequest {
+    oneof payload {
+        SaveMultipleFileInfo info = 1;
+        bytes data = 2;
+    }
+}
+
+message SaveMultipleResponse {
+    // Names of files that were not saved, the rest are saved
+    repeated string failed = 1;
 }
 
 

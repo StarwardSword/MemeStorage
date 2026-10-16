@@ -14,6 +14,7 @@ DEFAULT_SERVER = "localhost:50051"
 CHUNK_SIZE = 64 * 1024
 TIMEOUT = 300
 DEFAULT_JOBS = 4
+DEFAULT_BATCH = 32
 MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
 
@@ -55,12 +56,38 @@ def save_requests(path: Path, description: str) -> Iterator[service_pb2.SaveRequ
             yield service_pb2.SaveRequest(data=chunk)
 
 
+def save_multiple_requests(
+    paths: list[Path],
+) -> Iterator[service_pb2.SaveMultipleRequest]:
+    for path in paths:
+        yield service_pb2.SaveMultipleRequest(
+            info=service_pb2.SaveMultipleFileInfo(filename=path.name)
+        )
+        with open(path, "rb") as f:
+            while chunk := f.read(CHUNK_SIZE):
+                yield service_pb2.SaveMultipleRequest(data=chunk)
+
+
+# Server reports failed files by name, so a batch never holds two files with the same name
+def batches(paths: list[Path], size: int) -> list[list[Path]]:
+    res: list[list[Path]] = []
+    names: set[str] = set()
+    for path in paths:
+        if not res or len(res[-1]) >= size or path.name in names:
+            res.append([])
+            names = set()
+        res[-1].append(path)
+        names.add(path.name)
+    return res
+
+
 def upload(
     stub: service_pb2_grpc.MemeStorageStub,
     target: Path,
     description: str,
     recursive: bool,
     jobs: int,
+    batch_size: int,
 ) -> int:
     files = collect(target, recursive)
     if not files:
@@ -80,33 +107,53 @@ def upload(
     # cancelled by executor.shutdown(cancel_futures=True) and would hang
     stop = threading.Event()
 
-    def upload_one(path: Path) -> str | None:
+    # Returns uuid of every file in the group, None for a file the server did not save.
+    # SaveMultiple does not return uuids, its saved files get "" instead.
+    # It does not take a description either, so described files go one by one through Save
+    def upload_group(group: list[Path]) -> list[str | None] | None:
         if stop.is_set():
             return None
-        return stub.Save(save_requests(path, description), timeout=TIMEOUT).uuid
+        if description:
+            return [
+                stub.Save(save_requests(group[0], description), timeout=TIMEOUT).uuid
+            ]
+
+        response = stub.SaveMultiple(
+            save_multiple_requests(group), timeout=TIMEOUT * len(group)
+        )
+        failed_names = set(response.failed)
+        return [None if p.name in failed_names else "" for p in group]
+
+    groups = [[p] for p in media] if description else batches(media, batch_size)
 
     # Channel is thread-safe, so every upload shares it; results are printed in completion order
     uploaded, failed, not_sent = 0, 0, 0
     with ThreadPoolExecutor(max_workers=jobs) as executor:
-        futures = {executor.submit(upload_one, path): path for path in media}
+        futures = {executor.submit(upload_group, group): group for group in groups}
         try:
             for future in as_completed(futures):
-                path = futures[future]
+                group = futures[future]
                 try:
-                    file_id = future.result()
+                    file_ids = future.result()
                 except grpc.RpcError as e:
-                    print(f"FAIL  {path}: {e.code().name}: {e.details()}")
-                    failed += 1
+                    for path in group:
+                        print(f"FAIL  {path}: {e.code().name}: {e.details()}")
+                    failed += len(group)
                     # No point in sending the queued files to a server that is down
                     if e.code() == grpc.StatusCode.UNAVAILABLE:
                         stop.set()
                     continue
 
-                if file_id is None:
-                    not_sent += 1
+                if file_ids is None:
+                    not_sent += len(group)
                     continue
-                print(f"OK    {file_id}  {path}")
-                uploaded += 1
+                for path, file_id in zip(group, file_ids):
+                    if file_id is None:
+                        print(f"FAIL  {path}: not saved by the server")
+                        failed += 1
+                        continue
+                    print(f"OK    {file_id}  {path}" if file_id else f"OK    {path}")
+                    uploaded += 1
         except KeyboardInterrupt:
             # Uploads in flight still finish when the executor exits, queued ones are dropped
             stop.set()
@@ -249,7 +296,7 @@ def main() -> int:
         "-d",
         "--description",
         default="",
-        help="text description, applied to every uploaded file",
+        help="text description, applied to every uploaded file; files are then sent one by one",
     )
     upload_cmd.add_argument(
         "-r", "--recursive", action="store_true", help="include subdirectories"
@@ -260,6 +307,13 @@ def main() -> int:
         type=positive_int,
         default=DEFAULT_JOBS,
         help=f"parallel uploads (default: {DEFAULT_JOBS})",
+    )
+    upload_cmd.add_argument(
+        "-b",
+        "--batch-size",
+        type=positive_int,
+        default=DEFAULT_BATCH,
+        help=f"files sent in one call (default: {DEFAULT_BATCH}), ignored with --description",
     )
 
     get_cmd = commands.add_parser(
@@ -299,7 +353,12 @@ def main() -> int:
         match args.command:
             case "upload":
                 return upload(
-                    stub, args.path, args.description, args.recursive, args.jobs
+                    stub,
+                    args.path,
+                    args.description,
+                    args.recursive,
+                    args.jobs,
+                    args.batch_size,
                 )
             case "get":
                 return get(stub, args.query, args.output, args.count)

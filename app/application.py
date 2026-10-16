@@ -11,6 +11,7 @@ from .embeddings import (
 from .storage import Storage, Record
 from .file_storage import FileStorage
 from .file_storage_models import StoredFile, FileDescriptor
+from pydantic import BaseModel, ConfigDict
 
 
 class Application:
@@ -77,23 +78,17 @@ class Application:
         self.storage.save([record])
         return record
 
-    def save(
-        self,
-        original_name: str,
-        data: Iterator[bytes],
-        content_type: str | None = None,
-        embeddings: Embeddings | None = None,
-        text_description: str | None = None,
-        text_embeddings: Embeddings | None = None,
-    ) -> uuid.UUID:
+    def save(self, msg: SaveMessage) -> uuid.UUID:
 
         id = uuid.uuid7()
 
-        descriptor = self._save_to_file_storage(id, data, original_name, content_type)
+        descriptor = self._save_to_file_storage(
+            id, msg.data, msg.original_name, msg.content_type
+        )
 
         try:
             record = self._save_to_vector_storage(
-                descriptor, embeddings, text_description, text_embeddings
+                descriptor, msg.embeddings, msg.text_description, msg.text_embeddings
             )
         except:
             self.file_storage.remove(id)
@@ -138,6 +133,49 @@ class Application:
         embeddings = self.embedding_provider.query(queries)
         return self.get_by_embeddings(embeddings, n_records)
 
+    # List of saved ids and list of items that couldn't be saved
+    def save_multiple(self, msgs: Iterator[SaveMessage]) -> list[str]:
+        errored: list[str] = []
+        descriptors: list[FileDescriptor] = []
+
+        for msg in msgs:
+            id = uuid.uuid7()
+            try:
+                descriptor = self._save_to_file_storage(
+                    id, msg.data, msg.original_name, msg.content_type
+                )
+                descriptors.append(descriptor)
+            except Exception:
+                # todo: log
+                self.file_storage.remove(id)
+                errored.append(msg.original_name)
+
+        embeddings = self.embedding_provider.document(descriptors)
+        records = [
+            Record(
+                id=x.id,
+                embedding=embeddings[i],
+                text_description=None,
+                text_embedding=None,
+            )
+            for (i, x) in enumerate(descriptors)
+        ]
+
+        self.storage.save(records)
+        return errored
+
 
 class NegativeRecordCount(Exception):
     pass
+
+
+class SaveMessage(BaseModel):
+    # Iterator and numpy array have no pydantic schema, they are checked with isinstance
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    original_name: str
+    data: Iterator[bytes]
+    content_type: str | None = None
+    embeddings: Embeddings | None = None
+    text_description: str | None = None
+    text_embeddings: Embeddings | None = None

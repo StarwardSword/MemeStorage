@@ -51,6 +51,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /files/batch:
+    post:
+      tags:
+      - files
+      summary: Upload several files
+      description: Stores image, video and audio files and indexes them for search
+        in one pass. Content type of each file is detected as in `POST /files`. A
+        file that is not an image, video or audio or can not be stored does not fail
+        the request, its name is returned in `failed`. Ids of saved files are not
+        returned. Descriptions and precomputed embeddings are not supported here.
+      operationId: save_files
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_save_files'
+        required: true
+      responses:
+        '200':
+          description: Files processed, some of them may have failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveMultipleResponse'
+        '400':
+          description: A file part has no file name, nothing is stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /files/{file_id}:
     get:
       tags:
@@ -291,6 +327,19 @@ components:
       required:
       - file
       title: Body_save_file
+    Body_save_files:
+      properties:
+        files:
+          items:
+            type: string
+            contentMediaType: application/octet-stream
+          type: array
+          title: Files
+          description: Image, video or audio files
+      type: object
+      required:
+      - files
+      title: Body_save_files
     EmbeddingSearchRequest:
       properties:
         embeddings:
@@ -394,6 +443,18 @@ components:
       required:
       - queries
       title: QuerySearchRequest
+    SaveMultipleResponse:
+      properties:
+        failed:
+          items:
+            type: string
+          type: array
+          title: Failed
+          description: Names of files that were not saved, the rest are saved
+      type: object
+      required:
+      - failed
+      title: SaveMultipleResponse
     SaveResponse:
       properties:
         id:

@@ -4,15 +4,19 @@ from app import (
     Application,
     FileDescriptor,
     NegativeRecordCount,
+    SaveMessage,
     UnsupportedTypeError,
     WrongEmbeddingsError,
 )
 from typing import Callable, Iterator
+from mimetypes import guess_type
+from pathlib import Path
 import numpy as np
 import uuid
 from .config import Configuration
 
 WRONG_EMBEDDINGS = "embedding dimension does not match the model"
+MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
 
 class ProtocolError(Exception):
@@ -55,18 +59,20 @@ class MemeStorageService(service_pb2_grpc.MemeStorageServicer):
 
         try:
             id = self.app.save(
-                original_name=info.filename,
-                data=data,
-                content_type=info.content_type if info.content_type != "" else None,
-                text_description=info.text_description
-                if info.text_description != ""
-                else None,
-                embeddings=np.array(info.embeddings.value)
-                if len(info.embeddings.value) != 0
-                else None,
-                text_embeddings=np.array(info.text_embeddings.value)
-                if len(info.text_embeddings.value) != 0
-                else None,
+                SaveMessage(
+                    original_name=info.filename,
+                    data=data,
+                    content_type=info.content_type if info.content_type != "" else None,
+                    text_description=info.text_description
+                    if info.text_description != ""
+                    else None,
+                    embeddings=np.array(info.embeddings.value)
+                    if len(info.embeddings.value) != 0
+                    else None,
+                    text_embeddings=np.array(info.text_embeddings.value)
+                    if len(info.text_embeddings.value) != 0
+                    else None,
+                )
             )
         except ProtocolError as e:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(e))
@@ -76,6 +82,63 @@ class MemeStorageService(service_pb2_grpc.MemeStorageServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, WRONG_EMBEDDINGS)
 
         return pb2.SaveResponse(uuid=str(id))
+
+    # Every info message starts the next file. Model refuses a non-media file for the whole batch,
+    # so such files are not passed to the application, their names go to rejected
+    @staticmethod
+    def _split_uploaded_files(
+        first: pb2.SaveMultipleFileInfo,
+        request: Iterator[pb2.SaveMultipleRequest],
+        rejected: list[str],
+    ) -> Iterator[SaveMessage]:
+        info: pb2.SaveMultipleFileInfo | None = first
+        while info is not None:
+            current, info = info, None
+
+            def chunks() -> Iterator[bytes]:
+                nonlocal info
+                for r in request:
+                    if r.WhichOneof("payload") == "info":
+                        info = r.info
+                        return
+                    yield r.data
+
+            data = chunks()
+            content_type = (
+                current.content_type or guess_type(Path(current.filename).name)[0]
+            )
+            if content_type is not None and content_type.startswith(MEDIA_PREFIXES):
+                yield SaveMessage(
+                    original_name=current.filename,
+                    data=data,
+                    content_type=content_type,
+                )
+            else:
+                rejected.append(current.filename)
+
+            # File storage may stop reading a file halfway on error, the rest of it is skipped
+            for _ in data:
+                pass
+
+    def SaveMultiple(
+        self,
+        request_iterator: Iterator[pb2.SaveMultipleRequest],
+        context: grpc.ServicerContext,
+    ) -> pb2.SaveMultipleResponse:
+        first = next(request_iterator, None)
+        if first is None or first.WhichOneof("payload") != "info":
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "first message must be info"
+            )
+
+        rejected: list[str] = []
+        failed = self.app.save_multiple(
+            MemeStorageService._split_uploaded_files(
+                first.info, request_iterator, rejected
+            )
+        )
+
+        return pb2.SaveMultipleResponse(failed=rejected + failed)
 
     def GetFile(
         self, request: pb2.UUIDRequest, context: grpc.ServicerContext

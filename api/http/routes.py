@@ -1,7 +1,7 @@
 import uuid
 from functools import partial
 from mimetypes import guess_type
-from typing import Annotated, Any
+from typing import Annotated, Any, Iterator, TypeIs
 from urllib.parse import quote
 
 import numpy as np
@@ -20,7 +20,7 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse
 
-from app import Application, FileDescriptor, WrongEmbeddingsError
+from app import Application, FileDescriptor, SaveMessage, WrongEmbeddingsError
 from .schemas import (
     DEFAULT_COUNT,
     MAX_COUNT,
@@ -31,6 +31,7 @@ from .schemas import (
     FileList,
     Health,
     QuerySearchRequest,
+    SaveMultipleResponse,
     SaveResponse,
     SearchResponse,
 )
@@ -70,12 +71,20 @@ def wrong_embeddings(field: str) -> RequestValidationError:
     )
 
 
-def media_type(file: UploadFile) -> str:
+def detect_content_type(file: UploadFile) -> str | None:
     content_type = file.content_type
     if content_type is None or content_type in GENERIC_CONTENT_TYPES:
         content_type = guess_type(file.filename or "")[0]
+    return content_type
 
-    if content_type is None or not content_type.startswith(MEDIA_PREFIXES):
+
+def is_media(content_type: str | None) -> TypeIs[str]:
+    return content_type is not None and content_type.startswith(MEDIA_PREFIXES)
+
+
+def media_type(file: UploadFile) -> str:
+    content_type = detect_content_type(file)
+    if not is_media(content_type):
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             f"unsupported content type {content_type}, expected image/*, video/* or audio/*",
@@ -90,6 +99,10 @@ def content_disposition(filename: str, attachment: bool) -> str:
         for c in filename
     )
     return f"{'attachment' if attachment else 'inline'}; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
+
+
+def file_data(file: UploadFile) -> Iterator[bytes]:
+    return iter(partial(file.file.read, CHUNK_SIZE), b"")
 
 
 def file_list(descriptors: list[FileDescriptor]) -> FileList:
@@ -158,22 +171,71 @@ def save_file(
 
     try:
         file_id = application.save(
-            original_name=file.filename,
-            data=iter(partial(file.file.read, CHUNK_SIZE), b""),
-            content_type=media_type(file),
-            text_description=description,
-            embeddings=np.asarray(embeddings, dtype=np.float32)
-            if embeddings is not None
-            else None,
-            text_embeddings=np.asarray(text_embeddings, dtype=np.float32)
-            if text_embeddings is not None
-            else None,
+            SaveMessage(
+                original_name=file.filename,
+                data=file_data(file),
+                content_type=media_type(file),
+                text_description=description,
+                embeddings=np.asarray(embeddings, dtype=np.float32)
+                if embeddings is not None
+                else None,
+                text_embeddings=np.asarray(text_embeddings, dtype=np.float32)
+                if text_embeddings is not None
+                else None,
+            )
         )
     except WrongEmbeddingsError:
         raise wrong_embeddings("embeddings") from None
 
     response.headers["Location"] = str(request.url_for("get_file", file_id=file_id))
     return SaveResponse(id=file_id)
+
+
+@files.post(
+    "/batch",
+    summary="Upload several files",
+    description="Stores image, video and audio files and indexes them for search in one pass. "
+    "Content type of each file is detected as in `POST /files`. "
+    "A file that is not an image, video or audio or can not be stored does not fail the request, "
+    "its name is returned in `failed`. Ids of saved files are not returned. "
+    "Descriptions and precomputed embeddings are not supported here.",
+    response_description="Files processed, some of them may have failed",
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": Error,
+            "description": "A file part has no file name, nothing is stored",
+        },
+    },
+)
+def save_files(
+    application: ApplicationDep,
+    # Alias keeps the form field name without shadowing the router
+    uploads: Annotated[
+        list[UploadFile],
+        File(alias="files", description="Image, video or audio files"),
+    ],
+) -> SaveMultipleResponse:
+    if not all(x.filename for x in uploads):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "every file must have a name")
+
+    # Model refuses a non-media file for the whole batch, so such files are not passed to the application
+    rejected: list[str] = []
+    messages: list[SaveMessage] = []
+    for upload in uploads:
+        content_type = detect_content_type(upload)
+        if not is_media(content_type):
+            rejected.append(upload.filename or "")
+            continue
+        messages.append(
+            SaveMessage(
+                original_name=upload.filename or "",
+                data=file_data(upload),
+                content_type=content_type,
+            )
+        )
+
+    failed = application.save_multiple(iter(messages))
+    return SaveMultipleResponse(failed=rejected + failed)
 
 
 @files.get(

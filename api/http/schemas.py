@@ -86,6 +86,12 @@ class SaveResponse(BaseModel):
     id: uuid.UUID
 
 
+class SaveMultipleResponse(BaseModel):
+    failed: list[str] = Field(
+        description="Names of files that were not saved, the rest are saved"
+    )
+
+
 class Error(BaseModel):
     detail: str
 
