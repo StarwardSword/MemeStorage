@@ -12,3 +12,4 @@ python-multipart==0.0.32
 uvicorn==0.54.0
 pydantic==2.14.1
 pydantic-settings==2.15.0
+ruff==0.17.1

@@ -11,10 +11,7 @@ print("Initializing file storage")
 files = LocalFileStorage(config.files)
 
 print("Initializing gemma embedding model")
-embeddings = GemmaEmbeddings(
-    config=config.gemma,
-    file_storage=files
-)
+embeddings = GemmaEmbeddings(config=config.gemma, file_storage=files)
 
 print("Initializing chromadb")
 db = ChromaStorage(config.chroma)

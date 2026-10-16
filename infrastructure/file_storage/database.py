@@ -4,7 +4,8 @@ import os
 from contextlib import closing
 from app import FileDescriptor
 
-class SqliteDatabase():
+
+class SqliteDatabase:
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.connection_string)
         conn.row_factory = sqlite3.Row
@@ -13,7 +14,8 @@ class SqliteDatabase():
     def __init__(self, connection_string: str) -> None:
         # Connection string is a path to the database file, only its directory has to be created
         directory = os.path.dirname(connection_string)
-        if directory: os.makedirs(directory, exist_ok=True)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
 
         self.connection_string = connection_string
 
@@ -36,32 +38,28 @@ class SqliteDatabase():
         with closing(self._conn()) as conn:
             conn.execute(
                 """INSERT INTO file_data(id, content_type, original_name) VALUES (?, ?, ?)""",
-                (str(data.id), data.content_type, data.original_name)
+                (str(data.id), data.content_type, data.original_name),
             )
             conn.commit()
             return data.id
 
     def remove(self, id: uuid.UUID) -> None:
         with closing(self._conn()) as conn:
-            conn.execute(
-                "DELETE FROM file_data WHERE id = ?",
-                (str(id),)
-            )
+            conn.execute("DELETE FROM file_data WHERE id = ?", (str(id),))
             conn.commit()
-    
+
     def get(self, id: uuid.UUID) -> FileDescriptor:
         with closing(self._conn()) as conn:
             row = conn.execute(
                 "SELECT id, content_type, original_name FROM file_data WHERE id = ?",
-                (str(id),)
+                (str(id),),
             ).fetchone()
 
-        if row is None: raise FileNotFoundError(str(id))
+        if row is None:
+            raise FileNotFoundError(str(id))
 
         return FileDescriptor(
-            id=id,
-            original_name=row["original_name"],
-            content_type=row["content_type"]
+            id=id, original_name=row["original_name"], content_type=row["content_type"]
         )
 
     # Drops entire query if can't find any of specified items
@@ -72,22 +70,20 @@ class SqliteDatabase():
         with closing(self._conn()) as conn:
             rows = conn.execute(
                 f"SELECT id, content_type, original_name FROM file_data WHERE id IN ({idstr})",
-                (strs)
+                (strs),
             ).fetchall()
 
-        items = {
-            uuid.UUID(row["id"]): row
-            for row in rows
-        }
+        items = {uuid.UUID(row["id"]): row for row in rows}
 
         lost = list(dict.fromkeys(str(x) for x in ids if x not in items))
-        if lost: raise FileNotFoundError(", ".join(lost))
+        if lost:
+            raise FileNotFoundError(", ".join(lost))
 
         return [
             FileDescriptor(
                 id=id,
                 original_name=items[id]["original_name"],
-                content_type=items[id]["content_type"]
-            ) for id in ids
+                content_type=items[id]["content_type"],
+            )
+            for id in ids
         ]
-        

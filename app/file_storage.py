@@ -4,9 +4,10 @@ from abc import ABC, abstractmethod
 
 from .file_storage_models import StoredFile, FileDescriptor
 
+
 class FileStorage(ABC):
     @abstractmethod
-    def save(self, file: StoredFile) -> Path: 
+    def save(self, file: StoredFile) -> Path:
         """
         Reads and closes specified byte stream in the StoredFile
         """
@@ -16,7 +17,7 @@ class FileStorage(ABC):
     def get(self, id: uuid.UUID) -> StoredFile:
         """
         Returns StoredFile object with opened byte stream
-        
+
         It is up to caller to close the stream
         """
         raise NotImplementedError

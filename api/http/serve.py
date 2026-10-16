@@ -3,6 +3,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from anyio import to_thread
 from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app import Application, UnsupportedTypeError
 from .config import Configuration
@@ -16,7 +17,9 @@ async def unsupported_type(request: Request, exc: Exception) -> JSONResponse:
     content_type = exc.args[0] if exc.args else None
     return JSONResponse(
         status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-        content={"detail": f"unsupported content type {content_type}, expected image/*, video/* or audio/*"},
+        content={
+            "detail": f"unsupported content type {content_type}, expected image/*, video/* or audio/*"
+        },
     )
 
 
@@ -36,6 +39,9 @@ def create_app(app: Application, config: Configuration) -> FastAPI:
         # Operation ids are handler names instead of generated "save_file_files_post"
         generate_unique_id_function=lambda route: route.name,
     )
+
+    # api.add_middleware(CORSMiddleware, allow_origins=["*"])
+
     api.state.application = app
 
     for router in (files, search, service):
@@ -46,5 +52,7 @@ def create_app(app: Application, config: Configuration) -> FastAPI:
 
 # Blocks until the server is stopped
 def serve(app: Application, config: Configuration) -> None:
-    server = uvicorn.Server(uvicorn.Config(create_app(app, config), host=config.host, port=config.port))
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(app, config), host=config.host, port=config.port)
+    )
     server.run()

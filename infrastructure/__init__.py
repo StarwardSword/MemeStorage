@@ -8,5 +8,5 @@ __all__ = [
     "LocalFileStorage",
     "FileStorageConfiguration",
     "ChromaStorage",
-    "ChromaConfiguration"
+    "ChromaConfiguration",
 ]

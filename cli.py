@@ -27,9 +27,12 @@ def connect(server: str) -> service_pb2_grpc.MemeStorageStub:
 
 # --- upload
 
+
 def collect(target: Path, recursive: bool) -> list[Path]:
-    if target.is_file(): return [target]
-    if not target.is_dir(): raise FileNotFoundError(target)
+    if target.is_file():
+        return [target]
+    if not target.is_dir():
+        raise FileNotFoundError(target)
 
     candidates = target.rglob("*") if recursive else target.iterdir()
     return sorted(p for p in candidates if p.is_file())
@@ -43,7 +46,8 @@ def is_media(path: Path) -> bool:
 
 def save_requests(path: Path, description: str) -> Iterator[service_pb2.SaveRequest]:
     info = service_pb2.SaveFileInfo(filename=path.name)
-    if description: info.text_description = description
+    if description:
+        info.text_description = description
     yield service_pb2.SaveRequest(info=info)
 
     with open(path, "rb") as f:
@@ -51,7 +55,13 @@ def save_requests(path: Path, description: str) -> Iterator[service_pb2.SaveRequ
             yield service_pb2.SaveRequest(data=chunk)
 
 
-def upload(stub: service_pb2_grpc.MemeStorageStub, target: Path, description: str, recursive: bool, jobs: int) -> int:
+def upload(
+    stub: service_pb2_grpc.MemeStorageStub,
+    target: Path,
+    description: str,
+    recursive: bool,
+    jobs: int,
+) -> int:
     files = collect(target, recursive)
     if not files:
         print(f"No files in {target}")
@@ -71,7 +81,8 @@ def upload(stub: service_pb2_grpc.MemeStorageStub, target: Path, description: st
     stop = threading.Event()
 
     def upload_one(path: Path) -> str | None:
-        if stop.is_set(): return None
+        if stop.is_set():
+            return None
         return stub.Save(save_requests(path, description), timeout=TIMEOUT).uuid
 
     # Channel is thread-safe, so every upload shares it; results are printed in completion order
@@ -87,7 +98,8 @@ def upload(stub: service_pb2_grpc.MemeStorageStub, target: Path, description: st
                     print(f"FAIL  {path}: {e.code().name}: {e.details()}")
                     failed += 1
                     # No point in sending the queued files to a server that is down
-                    if e.code() == grpc.StatusCode.UNAVAILABLE: stop.set()
+                    if e.code() == grpc.StatusCode.UNAVAILABLE:
+                        stop.set()
                     continue
 
                 if file_id is None:
@@ -101,16 +113,21 @@ def upload(stub: service_pb2_grpc.MemeStorageStub, target: Path, description: st
             raise
 
     if len(files) > 1:
-        print(f"\nUploaded: {uploaded}, skipped: {skipped}, failed: {failed}" + (f", not sent: {not_sent}" if not_sent else ""))
+        print(
+            f"\nUploaded: {uploaded}, skipped: {skipped}, failed: {failed}"
+            + (f", not sent: {not_sent}" if not_sent else "")
+        )
     return 1 if failed else 0
 
 
 # --- download
 
+
 def unique_path(directory: Path, filename: str) -> Path:
     # Filename comes from the server, never let it escape the output directory
     name = Path(filename).name
-    if name in ("", ".", ".."): name = "file"
+    if name in ("", ".", ".."):
+        name = "file"
 
     target = directory / name
     i = 1
@@ -121,7 +138,9 @@ def unique_path(directory: Path, filename: str) -> Path:
 
 
 # Streams file into the directory, returns its path and server-side info
-def download(stub: service_pb2_grpc.MemeStorageStub, file_id: str, output: Path) -> tuple[Path, service_pb2.DownloadFileInfo]:
+def download(
+    stub: service_pb2_grpc.MemeStorageStub, file_id: str, output: Path
+) -> tuple[Path, service_pb2.DownloadFileInfo]:
     responses = stub.GetFile(service_pb2.UUIDRequest(uuid=file_id), timeout=TIMEOUT)
 
     first = next(responses, None)
@@ -137,11 +156,13 @@ def download(stub: service_pb2_grpc.MemeStorageStub, file_id: str, output: Path)
         written = 0
         with open(partial, "xb") as f:
             for response in responses:
-                if response.WhichOneof("payload") != "chunk": raise ProtocolError("expected data chunk")
+                if response.WhichOneof("payload") != "chunk":
+                    raise ProtocolError("expected data chunk")
                 f.write(response.chunk)
                 written += len(response.chunk)
 
-        if written != info.size: raise ProtocolError(f"expected {info.size} bytes, got {written}")
+        if written != info.size:
+            raise ProtocolError(f"expected {info.size} bytes, got {written}")
         partial.rename(target)
     except BaseException:
         partial.unlink(missing_ok=True)
@@ -150,7 +171,9 @@ def download(stub: service_pb2_grpc.MemeStorageStub, file_id: str, output: Path)
     return target, info
 
 
-def download_all(stub: service_pb2_grpc.MemeStorageStub, ids: list[str], output: Path) -> int:
+def download_all(
+    stub: service_pb2_grpc.MemeStorageStub, ids: list[str], output: Path
+) -> int:
     failed = 0
     for i, file_id in enumerate(ids):
         try:
@@ -158,20 +181,28 @@ def download_all(stub: service_pb2_grpc.MemeStorageStub, ids: list[str], output:
         except grpc.RpcError as e:
             print(f"{i}: FAIL  {file_id}: {e.code().name}: {e.details()}")
             failed += 1
-            if e.code() == grpc.StatusCode.UNAVAILABLE: break
+            if e.code() == grpc.StatusCode.UNAVAILABLE:
+                break
             continue
         except ProtocolError as e:
             print(f"{i}: FAIL  {file_id}: {e}")
             failed += 1
             continue
 
-        print(f"{i}: {file_id}  {info.original_name} ({info.content_type}, {info.size} bytes) -> {target}")
+        print(
+            f"{i}: {file_id}  {info.original_name} ({info.content_type}, {info.size} bytes) -> {target}"
+        )
     return 1 if failed else 0
 
 
-def get(stub: service_pb2_grpc.MemeStorageStub, query: str, output: Path, count: int) -> int:
+def get(
+    stub: service_pb2_grpc.MemeStorageStub, query: str, output: Path, count: int
+) -> int:
     try:
-        response = stub.GetByQuery(service_pb2.QueryRequest(queries=[query], record_count=count), timeout=TIMEOUT)
+        response = stub.GetByQuery(
+            service_pb2.QueryRequest(queries=[query], record_count=count),
+            timeout=TIMEOUT,
+        )
     except grpc.RpcError as e:
         print(f"FAIL  {e.code().name}: {e.details()}")
         return 1
@@ -185,6 +216,7 @@ def get(stub: service_pb2_grpc.MemeStorageStub, query: str, output: Path, count:
 
 # --- entry point
 
+
 def is_uuid(value: str) -> bool:
     try:
         uuid.UUID(value)
@@ -195,44 +227,84 @@ def is_uuid(value: str) -> bool:
 
 def positive_int(value: str) -> int:
     n = int(value)
-    if n < 1: raise argparse.ArgumentTypeError("must be >= 1")
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
     return n
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="MemeStorage gRPC client")
-    parser.add_argument("--server", default=DEFAULT_SERVER, help=f"server address (default: {DEFAULT_SERVER})")
+    parser.add_argument(
+        "--server",
+        default=DEFAULT_SERVER,
+        help=f"server address (default: {DEFAULT_SERVER})",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    upload_cmd = commands.add_parser("upload", help="upload a file or every media file in a directory")
+    upload_cmd = commands.add_parser(
+        "upload", help="upload a file or every media file in a directory"
+    )
     upload_cmd.add_argument("path", type=Path)
-    upload_cmd.add_argument("-d", "--description", default="", help="text description, applied to every uploaded file")
-    upload_cmd.add_argument("-r", "--recursive", action="store_true", help="include subdirectories")
-    upload_cmd.add_argument("-j", "--jobs", type=positive_int, default=DEFAULT_JOBS, help=f"parallel uploads (default: {DEFAULT_JOBS})")
+    upload_cmd.add_argument(
+        "-d",
+        "--description",
+        default="",
+        help="text description, applied to every uploaded file",
+    )
+    upload_cmd.add_argument(
+        "-r", "--recursive", action="store_true", help="include subdirectories"
+    )
+    upload_cmd.add_argument(
+        "-j",
+        "--jobs",
+        type=positive_int,
+        default=DEFAULT_JOBS,
+        help=f"parallel uploads (default: {DEFAULT_JOBS})",
+    )
 
-    get_cmd = commands.add_parser("get", help="find files by text query and save them to a directory")
+    get_cmd = commands.add_parser(
+        "get", help="find files by text query and save them to a directory"
+    )
     get_cmd.add_argument("query")
-    get_cmd.add_argument("-o", "--output", type=Path, required=True, help="directory to save files to")
-    get_cmd.add_argument("-n", "--count", type=positive_int, default=1, help="number of files to fetch (default: 1)")
+    get_cmd.add_argument(
+        "-o", "--output", type=Path, required=True, help="directory to save files to"
+    )
+    get_cmd.add_argument(
+        "-n",
+        "--count",
+        type=positive_int,
+        default=1,
+        help="number of files to fetch (default: 1)",
+    )
 
-    download_cmd = commands.add_parser("download", help="save files with given ids to a directory")
+    download_cmd = commands.add_parser(
+        "download", help="save files with given ids to a directory"
+    )
     download_cmd.add_argument("ids", nargs="+")
-    download_cmd.add_argument("-o", "--output", type=Path, required=True, help="directory to save files to")
+    download_cmd.add_argument(
+        "-o", "--output", type=Path, required=True, help="directory to save files to"
+    )
 
     args = parser.parse_args()
 
     # One malformed id cancels the whole download, nothing is fetched
     if args.command == "download":
         invalid = [x for x in args.ids if not is_uuid(x)]
-        if invalid: parser.error(f"invalid uuid: {', '.join(invalid)}")
+        if invalid:
+            parser.error(f"invalid uuid: {', '.join(invalid)}")
 
     stub = connect(args.server)
 
     try:
         match args.command:
-            case "upload": return upload(stub, args.path, args.description, args.recursive, args.jobs)
-            case "get": return get(stub, args.query, args.output, args.count)
-            case _: return download_all(stub, args.ids, args.output)
+            case "upload":
+                return upload(
+                    stub, args.path, args.description, args.recursive, args.jobs
+                )
+            case "get":
+                return get(stub, args.query, args.output, args.count)
+            case _:
+                return download_all(stub, args.ids, args.output)
     except FileNotFoundError as e:
         print(f"Not found: {e}")
         return 1

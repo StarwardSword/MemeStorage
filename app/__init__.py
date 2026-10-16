@@ -1,5 +1,10 @@
 from .application import Application, NegativeRecordCount
-from .embeddings import EmbeddingProvider, Embeddings, UnsupportedTypeError, WrongEmbeddingsError
+from .embeddings import (
+    EmbeddingProvider,
+    Embeddings,
+    UnsupportedTypeError,
+    WrongEmbeddingsError,
+)
 from .file_storage import FileStorage
 from .file_storage_models import FileDescriptor, StoredFile
 from .storage import Storage, Record, RecordNotFoundError
