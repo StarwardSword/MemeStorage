@@ -1,5 +1,6 @@
-from .chroma_storage import ChromaStorage
+from .chroma_storage import ChromaStorage, Configuration
 
 __all__ = [
-    "ChromaStorage"
+    "ChromaStorage",
+    "Configuration"
 ]

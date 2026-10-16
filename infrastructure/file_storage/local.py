@@ -6,16 +6,17 @@ from typing import Generator, override
 from pathlib import Path
 from app import FileStorage, StoredFile, FileDescriptor
 from .database import SqliteDatabase
+from .config import Configuration
 
 class LocalFileStorage(FileStorage):
-    def __init__(self, root: Path, sqlite_connection_string: str, chunk_size: int = 64 * 1024) -> None:
-        if os.path.exists(root) and os.path.isfile(root): raise AttributeError(root, "must be a directory")
+    def __init__(self, config: Configuration) -> None:
+        if os.path.exists(config.root) and os.path.isfile(config.root): raise AttributeError(config.root, "must be a directory")
         #if not os.path.isabs(root): root = Path(os.path.abspath(root, os.curdir))
-        if not os.path.exists(root): os.mkdir(root)
+        if not os.path.exists(config.root): os.makedirs(config.root, exist_ok=True)
         
-        self.root: Path = root
-        self.chunk_size: int = chunk_size
-        self.database = SqliteDatabase(sqlite_connection_string)
+        self.root: Path = Path(config.root)
+        self.chunk_size: int = config.chunk_size
+        self.database = SqliteDatabase(config.sqlite_connection_string)
 
     @override
     def save(self, file: StoredFile) -> Path:

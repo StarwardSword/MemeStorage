@@ -1,6 +1,6 @@
 # MemeStorage
 
-Хранилище мемов (картинки, видео, аудио) с поиском по текстовому запросу. Эмбеддинги считает `google/embeddinggemma-2`, векторы лежат в ChromaDB, файлы — локально. Доступ через gRPC (порт `50051`) и CLI-клиент.
+Хранилище мемов (картинки, видео, аудио) с поиском по текстовому запросу. Эмбеддинги считает `google/embeddinggemma-2`, векторы лежат в ChromaDB, файлы — локально. Доступ через gRPC и CLI-клиент.
 
 ## Требования
 
@@ -66,13 +66,47 @@ make proto
 python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. --pyi_out=. ./api/grpc/proto/service.proto
 ```
 
+## Конфигурация
+
+Сервер читает `config.yaml` из текущей директории:
+
+```yaml
+gemma:
+  device: "cuda"
+  dtype: "bfloat16"
+
+chroma:
+  path: "./.runtime/storage.chromadb"
+
+files:
+  root: "./.runtime/files/"
+  sqlite_connection_string: "./.runtime/sqlite.db"
+  chunk_size: 65536
+
+grpc:
+  port: "[::]:50051"
+  max_workers: 10
+```
+
+| Ключ | Значения | По умолчанию |
+|---|---|---|
+| `gemma.device` | `cpu`, `cuda` (нужна CUDA-сборка PyTorch) | `cpu` |
+| `gemma.dtype` | `float32`, `float16`, `bfloat16` | `float32` |
+| `chroma.path` | путь к базе ChromaDB | обязательный |
+| `files.root` | директория для файлов | обязательный |
+| `files.sqlite_connection_string` | путь к файлу SQLite | обязательный |
+| `files.chunk_size` | размер чанка в байтах при чтении файлов | `65536` |
+| `grpc` | необязательная секция; без неё API не запускается | — |
+| `grpc.port` | адрес `host:port` | обязательный |
+| `grpc.max_workers` | число потоков gRPC-сервера | `10` |
+
 ## Запуск сервера
 
 ```powershell
 python main.py
 ```
 
-При первом запуске скачивается модель. Данные хранятся в `.runtime/`.
+При первом запуске скачивается модель.
 
 ## CLI-клиент
 

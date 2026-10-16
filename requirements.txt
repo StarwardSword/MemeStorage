@@ -7,3 +7,5 @@ numpy==2.5.2
 librosa==1.0.0
 grpcio==1.84.0
 grpcio-tools==1.84.0
+pydantic==2.14.1
+pydantic-settings==2.15.0

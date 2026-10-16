@@ -3,6 +3,7 @@ from sentence_transformers.base.modality_types import MultimodalInput
 from torch import dtype
 from app import EmbeddingProvider, Embeddings, FileDescriptor, FileStorage
 from typing import cast, override
+from .configuration import Configuration
 
 MODEL_NAME = "google/embeddinggemma-2"
 
@@ -37,8 +38,8 @@ def token_to_key(token: str) -> str:
 Query = dict[str, str]
 
 class GemmaEmbeddings(EmbeddingProvider):
-    def __init__(self, dtype: dtype, device: str, file_storage: FileStorage):
-        self.model = SentenceTransformer(MODEL_NAME, device=device, model_kwargs={"torch_dtype": dtype})
+    def __init__(self, config: Configuration, file_storage: FileStorage):
+        self.model = SentenceTransformer(MODEL_NAME, device=config.device, model_kwargs={"torch_dtype": config.dtype})
         self.file_storage = file_storage
 
     def _encode_single(self, query: Query, query_type: str) -> Embeddings:

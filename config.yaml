@@ -1,0 +1,13 @@
+gemma:
+  device: "cuda"
+  dtype: "bfloat16"
+
+chroma:
+  path: "./.runtime/storage.chromadb"
+
+files:
+  root: "./.runtime/files/"
+  sqlite_connection_string: "./.runtime/sqlite.db"
+  
+grpc:
+  port: "[::]:50051"

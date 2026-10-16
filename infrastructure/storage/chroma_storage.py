@@ -1,12 +1,12 @@
 import uuid
 import chromadb
 import numpy as np
-from pathlib import Path
+from .config import Configuration
 from app import Storage, Record, RecordNotFoundError, Embeddings
 
 class ChromaStorage(Storage):
-    def __init__(self, path: Path) -> None:
-        self.client = chromadb.PersistentClient(path=path)
+    def __init__(self, config: Configuration) -> None:
+        self.client = chromadb.PersistentClient(path=config.path)
         self.primary_collection = self.client.get_or_create_collection("memes_primary")
         self.text_description_collection = self.client.get_or_create_collection("memes_text_description")
 
