@@ -1,9 +1,10 @@
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.base.modality_types import MultimodalInput
 from torch import dtype
-from app import EmbeddingProvider, Embeddings, FileDescriptor, FileStorage
+from app import EmbeddingProvider, Embeddings, FileDescriptor, FileStorage, UnsupportedTypeError
 from typing import cast, override
 from .configuration import Configuration
+from threading import Semaphore
 
 MODEL_NAME = "google/embeddinggemma-2"
 
@@ -26,7 +27,7 @@ def mime_to_token(mime: str) -> str:
     if mime.startswith('audio'): return Token.AUDIO
     if mime.startswith('video'): return Token.VIDEO
     
-    raise ValueError(mime)
+    raise UnsupportedTypeError(mime)
 
 def token_to_key(token: str) -> str:
     match token:
@@ -41,13 +42,16 @@ class GemmaEmbeddings(EmbeddingProvider):
     def __init__(self, config: Configuration, file_storage: FileStorage):
         self.model = SentenceTransformer(MODEL_NAME, device=config.device, model_kwargs={"torch_dtype": config.dtype})
         self.file_storage = file_storage
+        self.semaphore = Semaphore(config.semaphore_count)
+        self.none_embeddings = self.document(["halo everynyan!"])[0]
 
     def _encode_single(self, query: Query, query_type: str) -> Embeddings:
         return self._encode_multiple([query], query_type)[0]
 
     def _encode_multiple(self, queries: list[Query], query_type: str) -> list[Embeddings]:
-        # WARN: slow af
-        arr = self.model.encode(cast(MultimodalInput, queries), prompt_name=query_type)
+        # Releases the slot even when encoding fails, otherwise failed files would use the slots up
+        with self.semaphore:
+            arr = self.model.encode(cast(MultimodalInput, queries), prompt_name=query_type)
         res: list[Embeddings] = list(arr)
 
         return res
@@ -80,3 +84,7 @@ class GemmaEmbeddings(EmbeddingProvider):
         if len(items) == 0: return []
         if isinstance(items[0], str): return self._document_text(cast(list[str], items))
         return self._document_descriptors(cast(list[FileDescriptor], items))
+
+    @override
+    def validate_embedding_dimension(self, embedding: Embeddings) -> bool: 
+        return len(embedding) == len(self.none_embeddings)

@@ -62,20 +62,22 @@ class ChromaStorage(Storage):
 
         RECORD, DISTANCE = 0, 1
 
-        found_ids = set([
-            x[RECORD].id
-            for row in primary_results
-            for x in row
-        ])
-        secondary_results = [[
-            x for x in row if x[RECORD].id not in found_ids
-        ] for row in secondary_results]
+        # It has to return at least empty array for each query
+        assert(len(primary_results) == len(secondary_results))
+        res: list[list[Record]] = []
 
-        concats = [sorted(p + s, key=lambda x: x[DISTANCE]) for p, s in zip(primary_results, secondary_results)]
+        for i in range(len(primary_results)):
+            items = {x[RECORD].id: (x[RECORD], x[DISTANCE]) for x in primary_results[i]} 
 
-        res = [[
-            x[RECORD] for x in batch[:min(len(batch), n_records)]
-        ] for batch in concats]
+            for secondary in secondary_results[i]:
+                # if items does not contain the thing OR items contains the thing but its distance is higher than secondary
+                if secondary[RECORD].id not in items or secondary[DISTANCE] < items[secondary[RECORD].id][DISTANCE]:
+                    items[secondary[RECORD].id] = secondary
+
+            # Secondary-only matches are appended after primary ones, so the merged list has to be sorted again
+            closest = sorted(items.values(), key=lambda x: x[DISTANCE])
+            records = [x[RECORD] for x in closest[:n_records]]
+            res.append(records)
 
         return res
 

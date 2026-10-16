@@ -1,6 +1,7 @@
 import argparse
 import sys
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from mimetypes import guess_type
 from pathlib import Path
@@ -184,6 +185,14 @@ def get(stub: service_pb2_grpc.MemeStorageStub, query: str, output: Path, count:
 
 # --- entry point
 
+def is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
 def positive_int(value: str) -> int:
     n = int(value)
     if n < 1: raise argparse.ArgumentTypeError("must be >= 1")
@@ -211,6 +220,12 @@ def main() -> int:
     download_cmd.add_argument("-o", "--output", type=Path, required=True, help="directory to save files to")
 
     args = parser.parse_args()
+
+    # One malformed id cancels the whole download, nothing is fetched
+    if args.command == "download":
+        invalid = [x for x in args.ids if not is_uuid(x)]
+        if invalid: parser.error(f"invalid uuid: {', '.join(invalid)}")
+
     stub = connect(args.server)
 
     try:

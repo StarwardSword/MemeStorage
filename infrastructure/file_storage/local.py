@@ -26,12 +26,16 @@ class LocalFileStorage(FileStorage):
             content_type=file.content_type
         ))
 
+        path = Path(self.root, str(file.id))
         try:
-            path = Path(self.root, str(file.id))
             with open(path, "wb") as f:
                 for d in file.data: f.write(d)
         except Exception:
             self.database.remove(file.id)
+
+            try:  os.remove(path)
+            except FileNotFoundError: pass
+
             raise
 
         return path

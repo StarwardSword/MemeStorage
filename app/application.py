@@ -2,7 +2,7 @@ import uuid
 from pathlib import Path
 from typing import Iterator
 from mimetypes import guess_type
-from .embeddings import EmbeddingProvider, Embeddings
+from .embeddings import EmbeddingProvider, Embeddings, WrongEmbeddingsError, UnsupportedTypeError
 from .storage import Storage, Record
 from .file_storage import FileStorage
 from .file_storage_models import StoredFile, FileDescriptor
@@ -18,8 +18,9 @@ class Application:
             if content_type is None:
                 content_type = guess_type(original_name)[0]
                 
+                # None means the type is unknown, not that it is unsupported
                 if content_type is None:
-                    raise ValueError(content_type)
+                    raise UnsupportedTypeError(None)
 
             self.file_storage.save(StoredFile(
                 id=id,
@@ -37,6 +38,9 @@ class Application:
     def _save_to_vector_storage(self, descriptor: FileDescriptor, embeddings: Embeddings | None, text_description: str | None, text_embeddings: Embeddings | None) -> Record:
             if embeddings is None:
                 embeddings = self.embedding_provider.document([descriptor])[0]
+            else:
+                if not self.embedding_provider.validate_embedding_dimension(embeddings):
+                    raise WrongEmbeddingsError()
 
             if text_description is not None: 
                  text_embeddings = self.embedding_provider.document([text_description])[0]
@@ -68,6 +72,7 @@ class Application:
                 record = self._save_to_vector_storage(descriptor, embeddings, text_description, text_embeddings)
             except:
                 self.file_storage.remove(id)
+                self.storage.remove([id])
                 raise
 
             return id
@@ -76,6 +81,9 @@ class Application:
         return self.file_storage.get(id)
 
     def get_by_embeddings(self, embeddings: list[Embeddings], n_records: int) -> list[list[FileDescriptor]]:
+        if n_records <= 0: raise NegativeRecordCount()
+        if not all(self.embedding_provider.validate_embedding_dimension(x) for x in embeddings): raise WrongEmbeddingsError()
+
         records = self.storage.get(embeddings, n_records)
 
         query_divided_ids = [[
@@ -100,5 +108,9 @@ class Application:
         return files
  
     def get_by_queries(self, queries: list[str], n_records: int) -> list[list[FileDescriptor]]:
+        if n_records <= 0: raise NegativeRecordCount()
         embeddings = self.embedding_provider.query(queries)
         return self.get_by_embeddings(embeddings, n_records)
+
+
+class NegativeRecordCount(Exception): pass

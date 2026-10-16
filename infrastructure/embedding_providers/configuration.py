@@ -4,6 +4,7 @@ from torch.cuda import is_available as cuda_available
 class Configuration(BaseModel):
     device: str = "cpu"
     dtype: str = "float32"
+    semaphore_count: int = 4
 
     @field_validator('device')
     @classmethod

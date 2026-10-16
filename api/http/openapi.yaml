@@ -11,7 +11,8 @@ paths:
       summary: Upload a file
       description: Stores an image, video or audio file and indexes it for search.
         Content type is taken from the file part, or guessed by file name when it
-        is missing or `application/octet-stream`.
+        is missing or `application/octet-stream`. `embeddings` must have the dimension
+        of the server model, otherwise the response is `422`.
       operationId: save_file
       requestBody:
         content:
@@ -211,7 +212,8 @@ paths:
       tags:
       - search
       summary: Search by embeddings
-      description: Finds the closest files for each precomputed query embedding.
+      description: Finds the closest files for each precomputed query embedding. Embeddings
+        must have the dimension of the server model, otherwise the response is `422`.
       operationId: search_by_embeddings
       requestBody:
         content:

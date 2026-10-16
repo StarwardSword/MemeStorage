@@ -6,9 +6,10 @@ from urllib.parse import quote
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse
 
-from app import Application, FileDescriptor
+from app import Application, FileDescriptor, WrongEmbeddingsError
 from .schemas import (
     DEFAULT_COUNT, MAX_COUNT, JsonVector,
     EmbeddingSearchRequest, Error, FileInfo, FileList, Health, QuerySearchRequest, SaveResponse, SearchResponse,
@@ -28,9 +29,18 @@ async def get_application(request: Request) -> Application:
 ApplicationDep = Annotated[Application, Depends(get_application)]
 
 
-# File storage does not report missing ids, vector storage raises RecordNotFoundError for them
-def ensure_exists(application: Application, file_id: uuid.UUID) -> None:
-    application.storage.get_by_id([file_id])
+# FileNotFoundError message may hold a server path, so the client gets only the id
+def file_not_found(file_id: uuid.UUID) -> HTTPException:
+    return HTTPException(status.HTTP_404_NOT_FOUND, f"file not found: {file_id}")
+
+
+# Dimension is known only to the model, so it is checked by the application but reported like request validation
+def wrong_embeddings(field: str) -> RequestValidationError:
+    return RequestValidationError([{
+        "type": "value_error",
+        "loc": ("body", field),
+        "msg": "embedding dimension does not match the model",
+    }])
 
 
 def media_type(file: UploadFile) -> str:
@@ -66,7 +76,8 @@ files = APIRouter(prefix="/files", tags=["files"])
     status_code=status.HTTP_201_CREATED,
     summary="Upload a file",
     description="Stores an image, video or audio file and indexes it for search. "
-        "Content type is taken from the file part, or guessed by file name when it is missing or `application/octet-stream`.",
+        "Content type is taken from the file part, or guessed by file name when it is missing or `application/octet-stream`. "
+        "`embeddings` must have the dimension of the server model, otherwise the response is `422`.",
     response_description="File stored",
     responses={
         status.HTTP_201_CREATED: {"headers": {
@@ -87,14 +98,17 @@ def save_file(
 ) -> SaveResponse:
     if not file.filename: raise HTTPException(status.HTTP_400_BAD_REQUEST, "file must have a name")
 
-    file_id = application.save(
-        original_name=file.filename,
-        data=iter(partial(file.file.read, CHUNK_SIZE), b""),
-        content_type=media_type(file),
-        text_description=description,
-        embeddings=np.asarray(embeddings, dtype=np.float32) if embeddings is not None else None,
-        text_embeddings=np.asarray(text_embeddings, dtype=np.float32) if text_embeddings is not None else None,
-    )
+    try:
+        file_id = application.save(
+            original_name=file.filename,
+            data=iter(partial(file.file.read, CHUNK_SIZE), b""),
+            content_type=media_type(file),
+            text_description=description,
+            embeddings=np.asarray(embeddings, dtype=np.float32) if embeddings is not None else None,
+            text_embeddings=np.asarray(text_embeddings, dtype=np.float32) if text_embeddings is not None else None,
+        )
+    except WrongEmbeddingsError:
+        raise wrong_embeddings("embeddings") from None
 
     response.headers["Location"] = str(request.url_for("get_file", file_id=file_id))
     return SaveResponse(id=file_id)
@@ -123,8 +137,10 @@ def get_file(
     application: ApplicationDep,
     download: Annotated[bool, Query(description="Send as attachment so browsers save the file instead of showing it")] = False,
 ) -> StreamingResponse:
-    ensure_exists(application, file_id)
-    stored = application.get_file(file_id)
+    try:
+        stored = application.get_file(file_id)
+    except FileNotFoundError:
+        raise file_not_found(file_id) from None
 
     headers = {"Content-Disposition": content_disposition(stored.original_name, download)}
     if stored.size is not None: headers["Content-Length"] = str(stored.size)
@@ -138,8 +154,10 @@ def get_file(
     responses=NOT_FOUND,
 )
 def get_file_info(file_id: uuid.UUID, application: ApplicationDep) -> FileInfo:
-    ensure_exists(application, file_id)
-    return FileInfo.model_validate(application.file_storage.descriptor(file_id))
+    try:
+        return FileInfo.model_validate(application.file_storage.descriptor(file_id))
+    except FileNotFoundError:
+        raise file_not_found(file_id) from None
 
 
 # --- search
@@ -171,11 +189,15 @@ def search_by_query(body: QuerySearchRequest, application: ApplicationDep) -> Se
 @search.post(
     "/embeddings",
     summary="Search by embeddings",
-    description="Finds the closest files for each precomputed query embedding.",
+    description="Finds the closest files for each precomputed query embedding. "
+        "Embeddings must have the dimension of the server model, otherwise the response is `422`.",
 )
 def search_by_embeddings(body: EmbeddingSearchRequest, application: ApplicationDep) -> SearchResponse:
     vectors = [np.asarray(x, dtype=np.float32) for x in body.embeddings]
-    return search_response(application.get_by_embeddings(vectors, body.count))
+    try:
+        return search_response(application.get_by_embeddings(vectors, body.count))
+    except WrongEmbeddingsError:
+        raise wrong_embeddings("embeddings") from None
 
 
 # --- service

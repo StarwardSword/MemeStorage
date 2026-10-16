@@ -2,10 +2,25 @@ syntax = "proto3";
 
 package api;
 
+// Errors come as gRPC status codes, details hold a human readable message
 service MemeStorage {
+    // INVALID_ARGUMENT: first message is not info or a later one is not data,
+    //   content type is not image/*, video/* or audio/* or can not be guessed by file name,
+    //   embeddings dimension does not match the model
     rpc Save(stream SaveRequest) returns (SaveResponse);
+
+    // INVALID_ARGUMENT: uuid is malformed
+    // NOT_FOUND: there is no file with this uuid
     rpc GetFile(UUIDRequest) returns (stream DownloadResponse);
+
+    // INVALID_ARGUMENT: no embeddings, embeddings dimension does not match the model,
+    //   record_count is less than 1 or greater than max_records from the server config
+    // INTERNAL: found files are missing from file storage
     rpc GetByEmbeddings(EmbeddingRequest) returns (MultipleIdResponse);
+
+    // INVALID_ARGUMENT: no queries,
+    //   record_count is less than 1 or greater than max_records from the server config
+    // INTERNAL: found files are missing from file storage
     rpc GetByQuery(QueryRequest) returns (MultipleIdResponse);
 }
 
@@ -43,7 +58,7 @@ message UUIDRequest {
 message DownloadFileInfo {
     string content_type = 1;
     string original_name = 2;
-    int32 size = 3;
+    int64 size = 3;
 }
 
 message DownloadResponse {

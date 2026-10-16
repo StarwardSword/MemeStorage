@@ -4,7 +4,7 @@
 
 ## Требования
 
-- Python 3.13+
+- Python 3.14+
 - FFmpeg shared-сборка в `PATH` — нужна `torchcodec` для видео:
 
 ```powershell
@@ -74,6 +74,7 @@ python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. --pyi_out=. .
 gemma:
   device: "cuda"
   dtype: "bfloat16"
+  semaphore_count: 4
 
 chroma:
   path: "./.runtime/storage.chromadb"
@@ -86,6 +87,7 @@ files:
 grpc:
   port: "[::]:50051"
   max_workers: 10
+  max_records: 32
 
 http:
   host: "0.0.0.0"
@@ -97,6 +99,7 @@ http:
 |---|---|---|
 | `gemma.device` | `cpu`, `cuda` (нужна CUDA-сборка PyTorch) | `cpu` |
 | `gemma.dtype` | `float32`, `float16`, `bfloat16` | `float32` |
+| `gemma.semaphore_count` | сколько вызовов модели выполняется одновременно, общий лимит для gRPC и HTTP | `4` |
 | `chroma.path` | путь к базе ChromaDB | обязательный |
 | `files.root` | директория для файлов | обязательный |
 | `files.sqlite_connection_string` | путь к файлу SQLite | обязательный |
@@ -104,6 +107,7 @@ http:
 | `grpc` | необязательная секция; без неё gRPC не запускается | — |
 | `grpc.port` | адрес `host:port` | обязательный |
 | `grpc.max_workers` | число потоков gRPC-сервера | `10` |
+| `grpc.max_records` | наибольший `record_count` в поисковых запросах gRPC | `32` |
 | `http` | необязательная секция; без неё HTTP не запускается | — |
 | `http.host` | адрес, на котором слушает HTTP-сервер | `127.0.0.1` |
 | `http.port` | порт HTTP-сервера | `8000` |
@@ -137,9 +141,17 @@ python main.py
 
 - `file` — обязательное, картинка, видео или аудио. Если тип не передан или равен `application/octet-stream`, сервер определяет его по имени файла. На другие типы сервер отвечает `415`.
 - `description` — текстовое описание, файл находится и по нему.
-- `embeddings` и `text_embeddings` — готовые эмбеддинги файла и описания в виде JSON-массива чисел.
+- `embeddings` и `text_embeddings` — готовые эмбеддинги файла и описания в виде JSON-массива чисел. Размерность `embeddings` должна совпадать с моделью сервера.
 
-Ошибки возвращаются в виде `{"detail": ...}`: `404` — файла нет, `415` — неподдерживаемый тип, `422` — запрос не прошёл валидацию.
+Ошибки возвращаются в виде `{"detail": ...}`:
+
+| Код | Когда |
+|---|---|
+| `404` | файла с таким id нет |
+| `415` | файл не картинка, не видео и не аудио |
+| `422` | запрос не прошёл валидацию: битый uuid, `count` вне `1..100`, размерность эмбеддинга не совпадает с моделью и т. п. |
+
+Для `422` поле `detail` — список ошибок по полям в формате FastAPI, для остальных кодов — строка.
 
 ```powershell
 # Загрузить файл с описанием
@@ -164,6 +176,16 @@ make openapi
 python -m api.http.openapi
 ```
 
+## gRPC API
+
+Контракт лежит в [`api/grpc/proto/service.proto`](api/grpc/proto/service.proto). Ошибки приходят как статусы gRPC, текст ошибки — в `details`:
+
+| Статус | Когда |
+|---|---|
+| `INVALID_ARGUMENT` | первое сообщение `Save` не `info` или следующее не `data`; неподдерживаемый тип файла или тип не определяется по имени; размерность эмбеддинга не совпадает с моделью; битый uuid; пустой список запросов или эмбеддингов; `record_count` меньше 1 или больше `grpc.max_records` |
+| `NOT_FOUND` | файла с таким uuid нет (`GetFile`) |
+| `INTERNAL` | поиск нашёл записи, файлов которых нет в хранилище (хранилища рассинхронизированы) |
+
 ## CLI-клиент
 
 ```powershell
@@ -176,5 +198,7 @@ python cli.py get "грустный кот" -o ./out -n 5
 # Скачать по id
 python cli.py download <uuid> <uuid> -o ./out
 ```
+
+Если хотя бы один id в `download` не является uuid, клиент ничего не скачивает и выводит список неправильных id.
 
 Другой адрес сервера: `python cli.py --server host:50051 ...`
