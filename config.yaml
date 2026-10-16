@@ -11,3 +11,7 @@ files:
   
 grpc:
   port: "[::]:50051"
+
+http:
+  host: "0.0.0.0"
+  port: 8000

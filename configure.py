@@ -1,7 +1,7 @@
 from typing import Any
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict, YamlConfigSettingsSource
 from infrastructure import GemmaConfiguration, ChromaConfiguration, FileStorageConfiguration
-from api import GRPCConfiguration
+from api import GRPCConfiguration, HTTPConfiguration
 
 class Configuration(BaseSettings):
     def __init__(self, **kwargs: Any) -> None:
@@ -15,6 +15,7 @@ class Configuration(BaseSettings):
     chroma: ChromaConfiguration
     files: FileStorageConfiguration
     grpc: GRPCConfiguration | None = None
+    http: HTTPConfiguration | None = None
 
     @classmethod
     def settings_customise_sources(cls, 

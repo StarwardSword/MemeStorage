@@ -1,0 +1,442 @@
+openapi: 3.1.0
+info:
+  title: MemeStorage
+  description: Meme storage (images, video, audio) with search by text query.
+  version: 1.0.0
+paths:
+  /files:
+    post:
+      tags:
+      - files
+      summary: Upload a file
+      description: Stores an image, video or audio file and indexes it for search.
+        Content type is taken from the file part, or guessed by file name when it
+        is missing or `application/octet-stream`.
+      operationId: save_file
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_save_file'
+        required: true
+      responses:
+        '201':
+          description: File stored
+          headers:
+            Location:
+              description: URL of the stored file
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveResponse'
+        '400':
+          description: File part has no file name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: File is not an image, video or audio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /files/{file_id}:
+    get:
+      tags:
+      - files
+      summary: Download a file
+      description: Streams file contents with its stored content type. `Content-Disposition`
+        carries the original file name.
+      operationId: get_file
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: File Id
+      - name: download
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Send as attachment so browsers save the file instead of showing
+            it
+          default: false
+          title: Download
+        description: Send as attachment so browsers save the file instead of showing
+          it
+      responses:
+        '200':
+          description: File contents
+          content:
+            image/*: {}
+            video/*: {}
+            audio/*: {}
+          headers:
+            Content-Disposition:
+              description: '`inline` or `attachment` with the original file name'
+              schema:
+                type: string
+            Content-Length:
+              description: File size in bytes
+              schema:
+                type: integer
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /files/{file_id}/info:
+    get:
+      tags:
+      - files
+      summary: Get file info
+      operationId: get_file_info
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: File Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileInfo'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /search:
+    get:
+      tags:
+      - search
+      summary: Search by a text query
+      description: Shorthand for `POST /search/query` with a single query.
+      operationId: search_files
+      parameters:
+      - name: q
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          description: Text query
+          title: Q
+        description: Text query
+      - name: count
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          description: Number of files to return
+          default: 10
+          title: Count
+        description: Number of files to return
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileList'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /search/query:
+    post:
+      tags:
+      - search
+      summary: Search by text queries
+      description: Finds the closest files for each query, matching both file contents
+        and text descriptions.
+      operationId: search_by_query
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuerySearchRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /search/embeddings:
+    post:
+      tags:
+      - search
+      summary: Search by embeddings
+      description: Finds the closest files for each precomputed query embedding.
+      operationId: search_by_embeddings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingSearchRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /health:
+    get:
+      tags:
+      - service
+      summary: Health check
+      operationId: health
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+components:
+  schemas:
+    Body_save_file:
+      properties:
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          title: File
+          description: Image, video or audio file
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+          description: Text description, the file is also found by it
+        embeddings:
+          anyOf:
+          - type: string
+            contentMediaType: application/json
+            contentSchema:
+              items:
+                type: number
+              type: array
+              minItems: 1
+          - type: 'null'
+          title: Embeddings
+          description: Precomputed file embedding as a JSON array of numbers, computed
+            by the server when omitted
+        text_embeddings:
+          anyOf:
+          - type: string
+            contentMediaType: application/json
+            contentSchema:
+              items:
+                type: number
+              type: array
+              minItems: 1
+          - type: 'null'
+          title: Text Embeddings
+          description: Precomputed description embedding as a JSON array of numbers
+      type: object
+      required:
+      - file
+      title: Body_save_file
+    EmbeddingSearchRequest:
+      properties:
+        embeddings:
+          items:
+            items:
+              type: number
+            type: array
+            minItems: 1
+          type: array
+          maxItems: 32
+          minItems: 1
+          title: Embeddings
+          description: Query embeddings of the same dimension as stored ones
+        count:
+          type: integer
+          maximum: 100.0
+          minimum: 1.0
+          title: Count
+          description: Number of files to return for each query
+          default: 10
+      type: object
+      required:
+      - embeddings
+      title: EmbeddingSearchRequest
+    Error:
+      properties:
+        detail:
+          type: string
+          title: Detail
+      type: object
+      required:
+      - detail
+      title: Error
+    FileInfo:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        original_name:
+          type: string
+          title: Original Name
+        content_type:
+          type: string
+          title: Content Type
+      type: object
+      required:
+      - id
+      - original_name
+      - content_type
+      title: FileInfo
+    FileList:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/FileInfo'
+          type: array
+          title: Items
+          description: Closest files first
+      type: object
+      required:
+      - items
+      title: FileList
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    Health:
+      properties:
+        status:
+          type: string
+          const: ok
+          title: Status
+          default: ok
+      type: object
+      title: Health
+    QuerySearchRequest:
+      properties:
+        queries:
+          items:
+            type: string
+            minLength: 1
+          type: array
+          maxItems: 32
+          minItems: 1
+          title: Queries
+          description: Text queries
+        count:
+          type: integer
+          maximum: 100.0
+          minimum: 1.0
+          title: Count
+          description: Number of files to return for each query
+          default: 10
+      type: object
+      required:
+      - queries
+      title: QuerySearchRequest
+    SaveResponse:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+      type: object
+      required:
+      - id
+      title: SaveResponse
+    SearchResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/FileList'
+          type: array
+          title: Results
+          description: One list for each query, in request order
+      type: object
+      required:
+      - results
+      title: SearchResponse
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
