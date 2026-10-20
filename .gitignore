@@ -222,3 +222,4 @@ __marimo__/
 .runtime/
 
 *_pb2*
+/ffmpeg/

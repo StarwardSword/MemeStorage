@@ -1,3 +1,13 @@
+import os
+from pathlib import Path
+
+# torchcodec looks for FFmpeg DLLs once, when sentence_transformers is imported,
+# so the directory from `make ffmpeg` is added before importing infrastructure.
+# Without it torchcodec falls back to ffmpeg from PATH
+FFMPEG_DIR = Path(__file__).parent / "ffmpeg"
+if hasattr(os, "add_dll_directory") and FFMPEG_DIR.is_dir():
+    ffmpeg_dlls = os.add_dll_directory(str(FFMPEG_DIR))
+
 from api import serve_grpc, serve_http
 from app import Application
 from configure import Configuration

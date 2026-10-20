@@ -5,7 +5,25 @@
 ## Требования
 
 - Python 3.14+
-- FFmpeg shared-сборка в `PATH` — нужна `torchcodec` для видео:
+- DLL FFmpeg — нужны `torchcodec` для видео
+
+### FFmpeg
+
+Проще всего скачать DLL в папку `ffmpeg` проекта, сервер подключит их сам:
+
+```powershell
+make ffmpeg
+```
+
+Без `make`:
+
+```powershell
+python fetch_ffmpeg.py
+```
+
+Скачивается LGPL shared-сборка FFmpeg 9 из [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), контрольная сумма архива проверяется. Повторный запуск заменяет содержимое папки.
+
+Если папки `ffmpeg` нет, `torchcodec` ищет FFmpeg в `PATH`, тогда подойдёт и установленная shared-сборка:
 
 ```powershell
 winget install Gyan.FFmpeg.Shared
