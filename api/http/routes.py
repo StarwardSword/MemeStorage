@@ -20,19 +20,28 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse
 
-from app import Application, FileDescriptor, SaveMessage, WrongEmbeddingsError
+from app import (
+    Application,
+    FailureKind,
+    FailureReport,
+    FileDescriptor,
+    SaveMessage,
+    WrongEmbeddingsError,
+)
+
 from .schemas import (
     DEFAULT_COUNT,
     MAX_COUNT,
-    JsonVector,
     EmbeddingSearchRequest,
     Error,
     FileInfo,
     FileList,
     Health,
+    JsonVector,
     QuerySearchRequest,
+    SaveFailure,
+    SaveFailureKind,
     SaveMultipleResponse,
-    SaveResponse,
     SearchResponse,
 )
 
@@ -43,6 +52,12 @@ GENERIC_CONTENT_TYPES = ("", "application/octet-stream")
 
 NOT_FOUND: dict[int | str, dict[str, Any]] = {
     status.HTTP_404_NOT_FOUND: {"model": Error, "description": "File not found"}
+}
+
+FAILURE_KINDS: dict[FailureKind, SaveFailureKind] = {
+    FailureKind.FILE_STORAGE: "file_storage",
+    FailureKind.EMBEDDING_MODEL: "embedding_model",
+    FailureKind.VECTOR_STORAGE: "vector_storage",
 }
 
 
@@ -71,6 +86,17 @@ def wrong_embeddings(field: str) -> RequestValidationError:
     )
 
 
+# Client errors are checked before saving, so what the application reports is a server failure
+def save_failed(report: FailureReport) -> HTTPException:
+    return HTTPException(
+        status.HTTP_500_INTERNAL_SERVER_ERROR, f"{report.kind.value}: {report.value}"
+    )
+
+
+def save_failure(report: FailureReport) -> SaveFailure:
+    return SaveFailure(kind=FAILURE_KINDS[report.kind], message=report.value)
+
+
 def detect_content_type(file: UploadFile) -> str | None:
     content_type = file.content_type
     if content_type is None or content_type in GENERIC_CONTENT_TYPES:
@@ -82,12 +108,18 @@ def is_media(content_type: str | None) -> TypeIs[str]:
     return content_type is not None and content_type.startswith(MEDIA_PREFIXES)
 
 
+def unsupported_type_message(content_type: str | None) -> str:
+    return (
+        f"unsupported content type {content_type}, expected image/*, video/* or audio/*"
+    )
+
+
 def media_type(file: UploadFile) -> str:
     content_type = detect_content_type(file)
     if not is_media(content_type):
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            f"unsupported content type {content_type}, expected image/*, video/* or audio/*",
+            unsupported_type_message(content_type),
         )
     return content_type
 
@@ -120,21 +152,15 @@ files = APIRouter(prefix="/files", tags=["files"])
 
 @files.post(
     "",
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Upload a file",
     description="Stores an image, video or audio file and indexes it for search. "
     "Content type is taken from the file part, or guessed by file name when it is missing or `application/octet-stream`. "
-    "`embeddings` must have the dimension of the server model, otherwise the response is `422`.",
+    "`embeddings` and `text_embeddings` must have the dimension of the server model, otherwise the response is `422`. "
+    "Id of the saved file is not returned, the file is found by search.",
     response_description="File stored",
     responses={
-        status.HTTP_201_CREATED: {
-            "headers": {
-                "Location": {
-                    "description": "URL of the stored file",
-                    "schema": {"type": "string", "format": "uri"},
-                },
-            }
-        },
         status.HTTP_400_BAD_REQUEST: {
             "model": Error,
             "description": "File part has no file name",
@@ -143,11 +169,13 @@ files = APIRouter(prefix="/files", tags=["files"])
             "model": Error,
             "description": "File is not an image, video or audio",
         },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "model": Error,
+            "description": "File storage, embedding model or vector storage failed, nothing is stored",
+        },
     },
 )
 def save_file(
-    request: Request,
-    response: Response,
     application: ApplicationDep,
     file: Annotated[UploadFile, File(description="Image, video or audio file")],
     description: Annotated[
@@ -165,30 +193,37 @@ def save_file(
             description="Precomputed description embedding as a JSON array of numbers"
         ),
     ] = None,
-) -> SaveResponse:
+) -> None:
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "file must have a name")
 
-    try:
-        file_id = application.save(
-            SaveMessage(
-                original_name=file.filename,
-                data=file_data(file),
-                content_type=media_type(file),
-                text_description=description,
-                embeddings=np.asarray(embeddings, dtype=np.float32)
-                if embeddings is not None
-                else None,
-                text_embeddings=np.asarray(text_embeddings, dtype=np.float32)
-                if text_embeddings is not None
-                else None,
-            )
-        )
-    except WrongEmbeddingsError:
-        raise wrong_embeddings("embeddings") from None
+    msg = SaveMessage(
+        original_name=file.filename,
+        data=file_data(file),
+        content_type=media_type(file),
+        text_description=description,
+        embeddings=np.asarray(embeddings, dtype=np.float32)
+        if embeddings is not None
+        else None,
+        text_embeddings=np.asarray(text_embeddings, dtype=np.float32)
+        if text_embeddings is not None
+        else None,
+    )
 
-    response.headers["Location"] = str(request.url_for("get_file", file_id=file_id))
-    return SaveResponse(id=file_id)
+    # Application reports a wrong dimension as a model failure, here it is a client error
+    for field, value in (
+        ("embeddings", msg.embeddings),
+        ("text_embeddings", msg.text_embeddings),
+    ):
+        if (
+            value is not None
+            and not application.embedding_provider.validate_embedding_dimension(value)
+        ):
+            raise wrong_embeddings(field)
+
+    failure = application.save(msg)
+    if failure is not None:
+        raise save_failed(failure)
 
 
 @files.post(
@@ -197,7 +232,7 @@ def save_file(
     description="Stores image, video and audio files and indexes them for search in one pass. "
     "Content type of each file is detected as in `POST /files`. "
     "A file that is not an image, video or audio or can not be stored does not fail the request, "
-    "its name is returned in `failed`. Ids of saved files are not returned. "
+    "it is reported in `failed` with the failed stage. Ids of saved files are not returned. "
     "Descriptions and precomputed embeddings are not supported here.",
     response_description="Files processed, some of them may have failed",
     responses={
@@ -218,13 +253,19 @@ def save_files(
     if not all(x.filename for x in uploads):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "every file must have a name")
 
-    # Model refuses a non-media file for the whole batch, so such files are not passed to the application
-    rejected: list[str] = []
+    # With save strategy "fast" the model refuses a non-media file for the whole batch,
+    # so such files are not passed to the application
+    rejected: list[SaveFailure] = []
     messages: list[SaveMessage] = []
     for upload in uploads:
         content_type = detect_content_type(upload)
         if not is_media(content_type):
-            rejected.append(upload.filename or "")
+            rejected.append(
+                SaveFailure(
+                    kind="unsupported_type",
+                    message=f"{upload.filename}: {unsupported_type_message(content_type)}",
+                )
+            )
             continue
         messages.append(
             SaveMessage(
@@ -235,7 +276,7 @@ def save_files(
         )
 
     failed = application.save_multiple(iter(messages))
-    return SaveMultipleResponse(failed=rejected + failed)
+    return SaveMultipleResponse(failed=rejected + [save_failure(x) for x in failed])
 
 
 @files.get(

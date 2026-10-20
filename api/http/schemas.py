@@ -1,5 +1,6 @@
 import uuid
 from typing import Annotated, Literal
+
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -82,13 +83,25 @@ class EmbeddingSearchRequest(BaseModel):
         return v
 
 
-class SaveResponse(BaseModel):
-    id: uuid.UUID
+SaveFailureKind = Literal[
+    "unsupported_type", "file_storage", "embedding_model", "vector_storage"
+]
+
+
+class SaveFailure(BaseModel):
+    kind: SaveFailureKind = Field(
+        description="Stage that failed. `unsupported_type`: the file is not an image, video or audio "
+        "and was not passed to the application; `embedding_model` includes a wrong embedding dimension"
+    )
+    message: str = Field(
+        description="Usually holds the file name, but not always: "
+        'with save strategy "fast" a failed batch is reported without file names'
+    )
 
 
 class SaveMultipleResponse(BaseModel):
-    failed: list[str] = Field(
-        description="Names of files that were not saved, the rest are saved"
+    failed: list[SaveFailure] = Field(
+        description="Files that were not saved, the rest are saved"
     )
 
 

@@ -1,3 +1,3 @@
-from .local import LocalFileStorage, Configuration
+from .local import Configuration, LocalFileStorage
 
 __all__ = ["LocalFileStorage", "Configuration"]

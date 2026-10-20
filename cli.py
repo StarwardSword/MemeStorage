@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 import grpc
+
 from api.grpc.proto import service_pb2, service_pb2_grpc
 
 DEFAULT_SERVER = "localhost:50051"
@@ -45,40 +46,26 @@ def is_media(path: Path) -> bool:
     return content_type is not None and content_type.startswith(MEDIA_PREFIXES)
 
 
-def save_requests(path: Path, description: str) -> Iterator[service_pb2.SaveRequest]:
-    info = service_pb2.SaveFileInfo(filename=path.name)
-    if description:
-        info.text_description = description
-    yield service_pb2.SaveRequest(info=info)
-
-    with open(path, "rb") as f:
-        while chunk := f.read(CHUNK_SIZE):
-            yield service_pb2.SaveRequest(data=chunk)
-
-
 def save_multiple_requests(
-    paths: list[Path],
+    paths: list[Path], description: str
 ) -> Iterator[service_pb2.SaveMultipleRequest]:
     for path in paths:
-        yield service_pb2.SaveMultipleRequest(
-            info=service_pb2.SaveMultipleFileInfo(filename=path.name)
-        )
+        info = service_pb2.SaveFileInfo(filename=path.name)
+        if description:
+            info.text_description = description
+        yield service_pb2.SaveMultipleRequest(info=info)
+
         with open(path, "rb") as f:
             while chunk := f.read(CHUNK_SIZE):
                 yield service_pb2.SaveMultipleRequest(data=chunk)
 
 
-# Server reports failed files by name, so a batch never holds two files with the same name
 def batches(paths: list[Path], size: int) -> list[list[Path]]:
-    res: list[list[Path]] = []
-    names: set[str] = set()
-    for path in paths:
-        if not res or len(res[-1]) >= size or path.name in names:
-            res.append([])
-            names = set()
-        res[-1].append(path)
-        names.add(path.name)
-    return res
+    return [paths[i : i + size] for i in range(0, len(paths), size)]
+
+
+def failure_kind(failure: service_pb2.SaveFailure) -> str:
+    return service_pb2.SaveFailure.Kind.Name(failure.kind)
 
 
 def upload(
@@ -107,24 +94,17 @@ def upload(
     # cancelled by executor.shutdown(cancel_futures=True) and would hang
     stop = threading.Event()
 
-    # Returns uuid of every file in the group, None for a file the server did not save.
-    # SaveMultiple does not return uuids, its saved files get "" instead.
-    # It does not take a description either, so described files go one by one through Save
-    def upload_group(group: list[Path]) -> list[str | None] | None:
+    # Returns files the server did not save, None when the group was not sent
+    def upload_group(group: list[Path]) -> list[service_pb2.SaveFailure] | None:
         if stop.is_set():
             return None
-        if description:
-            return [
-                stub.Save(save_requests(group[0], description), timeout=TIMEOUT).uuid
-            ]
 
         response = stub.SaveMultiple(
-            save_multiple_requests(group), timeout=TIMEOUT * len(group)
+            save_multiple_requests(group, description), timeout=TIMEOUT * len(group)
         )
-        failed_names = set(response.failed)
-        return [None if p.name in failed_names else "" for p in group]
+        return list(response.failed)
 
-    groups = [[p] for p in media] if description else batches(media, batch_size)
+    groups = batches(media, batch_size)
 
     # Channel is thread-safe, so every upload shares it; results are printed in completion order
     uploaded, failed, not_sent = 0, 0, 0
@@ -134,7 +114,7 @@ def upload(
             for future in as_completed(futures):
                 group = futures[future]
                 try:
-                    file_ids = future.result()
+                    failures = future.result()
                 except grpc.RpcError as e:
                     for path in group:
                         print(f"FAIL  {path}: {e.code().name}: {e.details()}")
@@ -144,16 +124,24 @@ def upload(
                         stop.set()
                     continue
 
-                if file_ids is None:
+                if failures is None:
                     not_sent += len(group)
                     continue
-                for path, file_id in zip(group, file_ids):
-                    if file_id is None:
-                        print(f"FAIL  {path}: not saved by the server")
-                        failed += 1
-                        continue
-                    print(f"OK    {file_id}  {path}" if file_id else f"OK    {path}")
-                    uploaded += 1
+                if not failures:
+                    for path in group:
+                        print(f"OK    {path}")
+                    uploaded += len(group)
+                    continue
+
+                # Server does not always name the failed file, so which files of the group
+                # are saved is unknown, only how many
+                for failure in failures:
+                    print(f"FAIL  {failure_kind(failure)}: {failure.message}")
+                mark = "FAIL" if len(failures) >= len(group) else "PART"
+                for path in group:
+                    print(f"{mark}  {path}")
+                failed += len(failures)
+                uploaded += len(group) - len(failures)
         except KeyboardInterrupt:
             # Uploads in flight still finish when the executor exits, queued ones are dropped
             stop.set()
@@ -296,7 +284,7 @@ def main() -> int:
         "-d",
         "--description",
         default="",
-        help="text description, applied to every uploaded file; files are then sent one by one",
+        help="text description, applied to every uploaded file",
     )
     upload_cmd.add_argument(
         "-r", "--recursive", action="store_true", help="include subdirectories"
@@ -313,7 +301,7 @@ def main() -> int:
         "--batch-size",
         type=positive_int,
         default=DEFAULT_BATCH,
-        help=f"files sent in one call (default: {DEFAULT_BATCH}), ignored with --description",
+        help=f"files sent in one call (default: {DEFAULT_BATCH})",
     )
 
     get_cmd = commands.add_parser(

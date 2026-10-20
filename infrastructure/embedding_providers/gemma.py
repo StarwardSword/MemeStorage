@@ -1,6 +1,9 @@
+from threading import Semaphore
+from typing import cast, override
+
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.base.modality_types import MultimodalInput
-from torch import dtype
+
 from app import (
     EmbeddingProvider,
     Embeddings,
@@ -8,9 +11,8 @@ from app import (
     FileStorage,
     UnsupportedTypeError,
 )
-from typing import cast, override
+
 from .configuration import Configuration
-from threading import Semaphore
 
 MODEL_NAME = "google/embeddinggemma-2"
 
@@ -63,6 +65,7 @@ class GemmaEmbeddings(EmbeddingProvider):
         )
         self.file_storage = file_storage
         self.semaphore = Semaphore(config.semaphore_count)
+        self.max_batch = config.max_batch
         self.none_embeddings = self.document(["halo everynyan!"])[0]
 
     def _encode_single(self, query: Query, query_type: str) -> Embeddings:
@@ -71,13 +74,13 @@ class GemmaEmbeddings(EmbeddingProvider):
     def _encode_multiple(
         self, queries: list[Query], query_type: str
     ) -> list[Embeddings]:
-        # Releases the slot even when encoding fails, otherwise failed files would use the slots up
         with self.semaphore:
             arr = self.model.encode(
-                cast(MultimodalInput, queries), prompt_name=query_type
+                cast(MultimodalInput, queries),
+                prompt_name=query_type,
+                batch_size=min(max(1, len(queries)), self.max_batch),
             )
         res: list[Embeddings] = list(arr)
-
         return res
 
     def _document_descriptors(self, items: list[FileDescriptor]) -> list[Embeddings]:

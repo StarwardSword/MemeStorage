@@ -8,4 +8,5 @@ openapi: proto
 	python -m api.http.openapi
 
 format:
+	ruff check . --select I --select F401 --fix
 	ruff format .

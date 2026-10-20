@@ -1,7 +1,9 @@
-import numpy as np
 from abc import ABC, abstractmethod
 from typing import overload
+
+import numpy as np
 from numpy.typing import NDArray
+
 from .file_storage_models import FileDescriptor
 
 Embeddings = NDArray[np.float32]

@@ -1,26 +1,16 @@
-import uvicorn
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+
+import uvicorn
 from anyio import to_thread
-from fastapi import FastAPI, Request, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from app import Application, UnsupportedTypeError
+from fastapi import FastAPI
+
+from app import Application
+
 from .config import Configuration
 from .routes import files, search, service
 
 DESCRIPTION = "Meme storage (images, video, audio) with search by text query."
-
-
-# Routes reject non-media types before saving, this catches what the model itself refuses
-async def unsupported_type(request: Request, exc: Exception) -> JSONResponse:
-    content_type = exc.args[0] if exc.args else None
-    return JSONResponse(
-        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-        content={
-            "detail": f"unsupported content type {content_type}, expected image/*, video/* or audio/*"
-        },
-    )
 
 
 def create_app(app: Application, config: Configuration) -> FastAPI:
@@ -32,10 +22,9 @@ def create_app(app: Application, config: Configuration) -> FastAPI:
 
     api = FastAPI(
         title="MemeStorage",
-        version="1.0.0",
+        version="2.0.0",
         description=DESCRIPTION,
         lifespan=lifespan,
-        exception_handlers={UnsupportedTypeError: unsupported_type},
         # Operation ids are handler names instead of generated "save_file_files_post"
         generate_unique_id_function=lambda route: route.name,
     )

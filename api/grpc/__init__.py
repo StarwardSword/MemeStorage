@@ -1,4 +1,4 @@
+from .serve import Configuration, serve
 from .service import MemeStorageService
-from .serve import serve, Configuration
 
 __all__ = ["MemeStorageService", "serve", "Configuration"]

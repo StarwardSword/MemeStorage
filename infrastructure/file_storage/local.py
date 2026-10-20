@@ -1,12 +1,14 @@
 import os.path
-from os import stat
 import uuid
 from io import BufferedReader
-from typing import Generator, override
+from os import stat
 from pathlib import Path
-from app import FileStorage, StoredFile, FileDescriptor
-from .database import SqliteDatabase
+from typing import Generator, override
+
+from app import FileDescriptor, FileStorage, StoredFile
+
 from .config import Configuration
+from .database import SqliteDatabase
 
 
 class LocalFileStorage(FileStorage):
@@ -83,7 +85,10 @@ class LocalFileStorage(FileStorage):
     @override
     def remove(self, id: uuid.UUID):
         filename = Path(self.root, str(id))
-        os.remove(filename)
+        try:
+            os.remove(filename)
+        except FileNotFoundError:
+            pass
         self.database.remove(id)
 
     @override

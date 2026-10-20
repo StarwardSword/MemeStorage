@@ -1,8 +1,11 @@
 import uuid
+
 import chromadb
 import numpy as np
+
+from app import Embeddings, Record, RecordNotFoundError, Storage
+
 from .config import Configuration
-from app import Storage, Record, RecordNotFoundError, Embeddings
 
 
 class ChromaStorage(Storage):

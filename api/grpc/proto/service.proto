@@ -4,14 +4,16 @@ package api;
 
 // Errors come as gRPC status codes, details hold a human readable message
 service MemeStorage {
+    // Saved file uuid is not returned, the file is found by search.
     // INVALID_ARGUMENT: first message is not info or a later one is not data,
     //   content type is not image/*, video/* or audio/* or can not be guessed by file name,
-    //   embeddings dimension does not match the model
+    //   embeddings or text_embeddings dimension does not match the model
+    // INTERNAL: file storage, embedding model or vector storage failed, nothing is stored
     rpc Save(stream SaveRequest) returns (SaveResponse);
 
     // Each info message starts a new file, data messages after it are its contents.
-    // A file that can not be saved, including an unsupported content type, goes to failed
-    //   instead of failing the call.
+    // A file that can not be saved, including an unsupported content type or a wrong embeddings
+    //   dimension, goes to failed instead of failing the call. Uuids of saved files are not returned.
     // INVALID_ARGUMENT: first message is not info
     rpc SaveMultiple(stream SaveMultipleRequest) returns (SaveMultipleResponse);
 
@@ -52,26 +54,40 @@ message SaveRequest {
 }
 
 message SaveResponse {
-    string uuid = 1;
+    // Saved file uuid used to be here, application does not report it anymore
+    reserved 1;
+    reserved "uuid";
 }
 
 
 // SaveMultiple
-message SaveMultipleFileInfo {
-    string filename = 1;
-    optional string content_type = 2;
-}
-
 message SaveMultipleRequest {
     oneof payload {
-        SaveMultipleFileInfo info = 1;
+        SaveFileInfo info = 1;
         bytes data = 2;
     }
 }
 
+message SaveFailure {
+    enum Kind {
+        KIND_UNSPECIFIED = 0;
+        // Content type is not image/*, video/* or audio/*, the file was not passed to the application
+        UNSUPPORTED_TYPE = 1;
+        FILE_STORAGE = 2;
+        // Includes a wrong embeddings dimension
+        EMBEDDING_MODEL = 3;
+        VECTOR_STORAGE = 4;
+    }
+
+    Kind kind = 1;
+    // Usually holds the file name, but not always: with save_strategy "fast"
+    //   a failed batch is reported without file names
+    string message = 2;
+}
+
 message SaveMultipleResponse {
-    // Names of files that were not saved, the rest are saved
-    repeated string failed = 1;
+    // Files that were not saved, the rest are saved
+    repeated SaveFailure failed = 1;
 }
 
 

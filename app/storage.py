@@ -1,5 +1,4 @@
 import uuid
-from mimetypes import guess_file_type
 from abc import ABC, abstractmethod
 
 from .embeddings import Embeddings

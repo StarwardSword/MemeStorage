@@ -1,9 +1,12 @@
-import grpc
 from concurrent import futures
+
+import grpc
+
+from app import Application
+
+from .config import Configuration
 from .proto import service_pb2_grpc
 from .service import MemeStorageService
-from .config import Configuration
-from app import Application
 
 
 # Returns started server without blocking, caller decides when to wait for or stop it

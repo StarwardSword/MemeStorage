@@ -1,4 +1,12 @@
-from .application import Application, NegativeRecordCount, SaveMessage
+from .application import (
+    Application,
+    NegativeRecordCount,
+    SaveMessage,
+)
+from .application import (
+    Configuration as ApplicationConfiguration,
+)
+from .document_processor import FailureKind, FailureReport
 from .embeddings import (
     EmbeddingProvider,
     Embeddings,
@@ -7,9 +15,10 @@ from .embeddings import (
 )
 from .file_storage import FileStorage
 from .file_storage_models import FileDescriptor, StoredFile
-from .storage import Storage, Record, RecordNotFoundError
+from .storage import Record, RecordNotFoundError, Storage
 
 __all__ = [
+    "ApplicationConfiguration",
     "Application",
     "EmbeddingProvider",
     "Embeddings",
@@ -23,4 +32,6 @@ __all__ = [
     "WrongEmbeddingsError",
     "NegativeRecordCount",
     "SaveMessage",
+    "FailureKind",
+    "FailureReport",
 ]

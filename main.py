@@ -1,7 +1,7 @@
 from api import serve_grpc, serve_http
-from infrastructure import ChromaStorage, LocalFileStorage, GemmaEmbeddings
 from app import Application
 from configure import Configuration
+from infrastructure import ChromaStorage, GemmaEmbeddings, LocalFileStorage
 
 GRPC_STOP_GRACE = 5
 
@@ -16,7 +16,12 @@ embeddings = GemmaEmbeddings(config=config.gemma, file_storage=files)
 print("Initializing chromadb")
 db = ChromaStorage(config.chroma)
 
-app = Application(embedding_provider=embeddings, storage=db, file_storage=files)
+app = Application(
+    embedding_provider=embeddings,
+    storage=db,
+    file_storage=files,
+    configuration=config.app,
+)
 
 grpc_server = None
 if config.grpc is not None:

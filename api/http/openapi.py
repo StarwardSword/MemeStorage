@@ -6,8 +6,11 @@ Usage: python -m api.http.openapi
 
 from pathlib import Path
 from typing import cast
+
 import yaml
+
 from app import Application
+
 from .config import Configuration
 from .serve import create_app
 

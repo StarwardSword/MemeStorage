@@ -6,6 +6,7 @@ class Configuration(BaseModel):
     device: str = "cpu"
     dtype: str = "float32"
     semaphore_count: int = 4
+    max_batch: int
 
     @field_validator("device")
     @classmethod

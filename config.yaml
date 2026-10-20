@@ -1,6 +1,10 @@
+app:
+  save_strategy: "safe"
+
 gemma:
   device: "cuda"
   dtype: "bfloat16"
+  max_batch: 5
 
 chroma:
   path: "./.runtime/storage.chromadb"

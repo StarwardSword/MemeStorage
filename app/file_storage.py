@@ -1,8 +1,8 @@
 import uuid
-from pathlib import Path
 from abc import ABC, abstractmethod
+from pathlib import Path
 
-from .file_storage_models import StoredFile, FileDescriptor
+from .file_storage_models import FileDescriptor, StoredFile
 
 
 class FileStorage(ABC):

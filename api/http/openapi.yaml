@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: MemeStorage
   description: Meme storage (images, video, audio) with search by text query.
-  version: 1.0.0
+  version: 2.0.0
 paths:
   /files:
     post:
@@ -11,8 +11,9 @@ paths:
       summary: Upload a file
       description: Stores an image, video or audio file and indexes it for search.
         Content type is taken from the file part, or guessed by file name when it
-        is missing or `application/octet-stream`. `embeddings` must have the dimension
-        of the server model, otherwise the response is `422`.
+        is missing or `application/octet-stream`. `embeddings` and `text_embeddings`
+        must have the dimension of the server model, otherwise the response is `422`.
+        Id of the saved file is not returned, the file is found by search.
       operationId: save_file
       requestBody:
         content:
@@ -21,18 +22,8 @@ paths:
               $ref: '#/components/schemas/Body_save_file'
         required: true
       responses:
-        '201':
+        '204':
           description: File stored
-          headers:
-            Location:
-              description: URL of the stored file
-              schema:
-                type: string
-                format: uri
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SaveResponse'
         '400':
           description: File part has no file name
           content:
@@ -41,6 +32,13 @@ paths:
                 $ref: '#/components/schemas/Error'
         '415':
           description: File is not an image, video or audio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: File storage, embedding model or vector storage failed, nothing
+            is stored
           content:
             application/json:
               schema:
@@ -59,8 +57,9 @@ paths:
       description: Stores image, video and audio files and indexes them for search
         in one pass. Content type of each file is detected as in `POST /files`. A
         file that is not an image, video or audio or can not be stored does not fail
-        the request, its name is returned in `failed`. Ids of saved files are not
-        returned. Descriptions and precomputed embeddings are not supported here.
+        the request, it is reported in `failed` with the failed stage. Ids of saved
+        files are not returned. Descriptions and precomputed embeddings are not supported
+        here.
       operationId: save_files
       requestBody:
         content:
@@ -443,28 +442,41 @@ components:
       required:
       - queries
       title: QuerySearchRequest
+    SaveFailure:
+      properties:
+        kind:
+          type: string
+          enum:
+          - unsupported_type
+          - file_storage
+          - embedding_model
+          - vector_storage
+          title: Kind
+          description: 'Stage that failed. `unsupported_type`: the file is not an
+            image, video or audio and was not passed to the application; `embedding_model`
+            includes a wrong embedding dimension'
+        message:
+          type: string
+          title: Message
+          description: 'Usually holds the file name, but not always: with save strategy
+            "fast" a failed batch is reported without file names'
+      type: object
+      required:
+      - kind
+      - message
+      title: SaveFailure
     SaveMultipleResponse:
       properties:
         failed:
           items:
-            type: string
+            $ref: '#/components/schemas/SaveFailure'
           type: array
           title: Failed
-          description: Names of files that were not saved, the rest are saved
+          description: Files that were not saved, the rest are saved
       type: object
       required:
       - failed
       title: SaveMultipleResponse
-    SaveResponse:
-      properties:
-        id:
-          type: string
-          format: uuid
-          title: Id
-      type: object
-      required:
-      - id
-      title: SaveResponse
     SearchResponse:
       properties:
         results:

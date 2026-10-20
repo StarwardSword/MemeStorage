@@ -1,16 +1,19 @@
 from typing import Any
+
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     YamlConfigSettingsSource,
 )
+
+from api import GRPCConfiguration, HTTPConfiguration
+from app import ApplicationConfiguration
 from infrastructure import (
-    GemmaConfiguration,
     ChromaConfiguration,
     FileStorageConfiguration,
+    GemmaConfiguration,
 )
-from api import GRPCConfiguration, HTTPConfiguration
 
 
 class Configuration(BaseSettings):
@@ -24,6 +27,7 @@ class Configuration(BaseSettings):
     gemma: GemmaConfiguration
     chroma: ChromaConfiguration
     files: FileStorageConfiguration
+    app: ApplicationConfiguration
     grpc: GRPCConfiguration | None = None
     http: HTTPConfiguration | None = None
 
