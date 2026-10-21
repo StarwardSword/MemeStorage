@@ -13,13 +13,15 @@ from .database import SqliteDatabase
 
 class LocalFileStorage(FileStorage):
     def __init__(self, config: Configuration) -> None:
-        if os.path.exists(config.root) and os.path.isfile(config.root):
-            raise AttributeError(config.root, "must be a directory")
-        # if not os.path.isabs(root): root = Path(os.path.abspath(root, os.curdir))
-        if not os.path.exists(config.root):
-            os.makedirs(config.root, exist_ok=True)
+        for directory in (config.root, config.thumbnails_root):
+            if os.path.exists(directory) and os.path.isfile(directory):
+                raise AttributeError(directory, "must be a directory")
+            # if not os.path.isabs(root): root = Path(os.path.abspath(root, os.curdir))
+            if not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
 
         self.root: Path = Path(config.root)
+        self.thumbnails_root: Path = Path(config.thumbnails_root)
         self.chunk_size: int = config.chunk_size
         self.database = SqliteDatabase(config.sqlite_connection_string)
 
@@ -84,12 +86,24 @@ class LocalFileStorage(FileStorage):
 
     @override
     def remove(self, id: uuid.UUID):
-        filename = Path(self.root, str(id))
-        try:
-            os.remove(filename)
-        except FileNotFoundError:
-            pass
+        for filename in (Path(self.root, str(id)), self._thumbnail_path(id)):
+            try:
+                os.remove(filename)
+            except FileNotFoundError:
+                pass
         self.database.remove(id)
+
+    # Thumbnail exists when its file does, there is no record of it in the database
+    def _thumbnail_path(self, id: uuid.UUID) -> Path:
+        return Path(self.thumbnails_root, f"{id}.jpg")
+
+    @override
+    def save_thumbnail(self, id: uuid.UUID, data: bytes) -> None:
+        self._thumbnail_path(id).write_bytes(data)
+
+    @override
+    def get_thumbnail(self, id: uuid.UUID) -> bytes:
+        return self._thumbnail_path(id).read_bytes()
 
     @override
     def get_full_path(self, id: uuid.UUID) -> Path:

@@ -11,6 +11,7 @@ from .embeddings import (
 from .file_storage import FileStorage
 from .file_storage_models import FileDescriptor, StoredFile
 from .storage import Storage
+from .thumbnails import ThumbnailGenerator
 
 
 class Application:
@@ -19,13 +20,18 @@ class Application:
         embedding_provider: EmbeddingProvider,
         storage: Storage,
         file_storage: FileStorage,
+        thumbnail_generator: ThumbnailGenerator,
         configuration: Configuration,
     ) -> None:
         self.embedding_provider: EmbeddingProvider = embedding_provider
         self.storage: Storage = storage
         self.file_storage: FileStorage = file_storage
         self.document_processor = DocumentProcessor(
-            file_storage, embedding_provider, storage, configuration.save_strategy
+            file_storage,
+            embedding_provider,
+            storage,
+            thumbnail_generator,
+            configuration.save_strategy,
         )
 
     def save(self, msg: SaveMessage) -> FailureReport | None:
@@ -36,6 +42,10 @@ class Application:
 
     def get_file(self, id: uuid.UUID) -> StoredFile:
         return self.file_storage.get(id)
+
+    # JPEG bytes, see THUMBNAIL_CONTENT_TYPE
+    def get_thumbnail(self, id: uuid.UUID) -> bytes:
+        return self.file_storage.get_thumbnail(id)
 
     def get_by_embeddings(
         self, embeddings: list[Embeddings], n_records: int

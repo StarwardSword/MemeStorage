@@ -11,7 +11,12 @@ if hasattr(os, "add_dll_directory") and FFMPEG_DIR.is_dir():
 from api import serve_grpc, serve_http
 from app import Application
 from configure import Configuration
-from infrastructure import ChromaStorage, GemmaEmbeddings, LocalFileStorage
+from infrastructure import (
+    ChromaStorage,
+    GemmaEmbeddings,
+    LocalFileStorage,
+    PillowThumbnailGenerator,
+)
 
 GRPC_STOP_GRACE = 5
 
@@ -30,6 +35,7 @@ app = Application(
     embedding_provider=embeddings,
     storage=db,
     file_storage=files,
+    thumbnail_generator=PillowThumbnailGenerator(config.thumbnails),
     configuration=config.app,
 )
 

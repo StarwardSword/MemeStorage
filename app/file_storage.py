@@ -38,6 +38,20 @@ class FileStorage(ABC):
 
     @abstractmethod
     def remove(self, id: uuid.UUID) -> None:
+        """
+        Removes the file together with its thumbnail
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_thumbnail(self, id: uuid.UUID, data: bytes) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_thumbnail(self, id: uuid.UUID) -> bytes:
+        """
+        Raises FileNotFoundError when the file has no thumbnail
+        """
         raise NotImplementedError
 
     @abstractmethod

@@ -11,9 +11,11 @@ paths:
       summary: Upload a file
       description: Stores an image, video or audio file and indexes it for search.
         Content type is taken from the file part, or guessed by file name when it
-        is missing or `application/octet-stream`. `embeddings` and `text_embeddings`
-        must have the dimension of the server model, otherwise the response is `422`.
-        Id of the saved file is not returned, the file is found by search.
+        is missing or `application/octet-stream`. A thumbnail is built right after
+        the file is stored, a file it can not be built for is not stored. `embeddings`
+        and `text_embeddings` must have the dimension of the server model, otherwise
+        the response is `422`. Id of the saved file is not returned, the file is found
+        by search.
       operationId: save_file
       requestBody:
         content:
@@ -37,8 +39,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '500':
-          description: File storage, embedding model or vector storage failed, nothing
-            is stored
+          description: File storage, thumbnail, embedding model or vector storage
+            failed, nothing is stored
           content:
             application/json:
               schema:
@@ -162,6 +164,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FileInfo'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /files/{file_id}/thumbnail:
+    get:
+      tags:
+      - files
+      summary: Get file thumbnail
+      description: JPEG thumbnail of the file, the longest side is `thumbnails.size`
+        from the server config.
+      operationId: get_thumbnail
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: File Id
+      responses:
+        '200':
+          description: Thumbnail
+          content:
+            image/jpeg: {}
         '404':
           description: File not found
           content:
@@ -449,11 +484,13 @@ components:
           enum:
           - unsupported_type
           - file_storage
+          - thumbnail
           - embedding_model
           - vector_storage
           title: Kind
           description: 'Stage that failed. `unsupported_type`: the file is not an
-            image, video or audio and was not passed to the application; `embedding_model`
+            image, video or audio and was not passed to the application; `thumbnail`:
+            the file could not be decoded to build its thumbnail; `embedding_model`
             includes a wrong embedding dimension'
         message:
           type: string

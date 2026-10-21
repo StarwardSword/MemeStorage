@@ -25,6 +25,7 @@ MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
 FAILURE_KINDS = {
     FailureKind.FILE_STORAGE: pb2.SaveFailure.FILE_STORAGE,
+    FailureKind.THUMBNAIL: pb2.SaveFailure.THUMBNAIL,
     FailureKind.EMBEDDING_MODEL: pb2.SaveFailure.EMBEDDING_MODEL,
     FailureKind.VECTOR_STORAGE: pb2.SaveFailure.VECTOR_STORAGE,
 }

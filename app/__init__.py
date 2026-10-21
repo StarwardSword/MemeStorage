@@ -16,6 +16,7 @@ from .embeddings import (
 from .file_storage import FileStorage
 from .file_storage_models import FileDescriptor, StoredFile
 from .storage import Record, RecordNotFoundError, Storage
+from .thumbnails import THUMBNAIL_CONTENT_TYPE, ThumbnailGenerator
 
 __all__ = [
     "ApplicationConfiguration",
@@ -34,4 +35,6 @@ __all__ = [
     "SaveMessage",
     "FailureKind",
     "FailureReport",
+    "ThumbnailGenerator",
+    "THUMBNAIL_CONTENT_TYPE",
 ]

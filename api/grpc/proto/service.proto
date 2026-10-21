@@ -8,7 +8,7 @@ service MemeStorage {
     // INVALID_ARGUMENT: first message is not info or a later one is not data,
     //   content type is not image/*, video/* or audio/* or can not be guessed by file name,
     //   embeddings or text_embeddings dimension does not match the model
-    // INTERNAL: file storage, embedding model or vector storage failed, nothing is stored
+    // INTERNAL: file storage, thumbnail, embedding model or vector storage failed, nothing is stored
     rpc Save(stream SaveRequest) returns (SaveResponse);
 
     // Each info message starts a new file, data messages after it are its contents.
@@ -77,6 +77,8 @@ message SaveFailure {
         // Includes a wrong embeddings dimension
         EMBEDDING_MODEL = 3;
         VECTOR_STORAGE = 4;
+        // The file could not be decoded to build its thumbnail
+        THUMBNAIL = 5;
     }
 
     Kind kind = 1;
