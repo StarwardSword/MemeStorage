@@ -5,6 +5,8 @@ from torch.cuda import is_available as cuda_available
 
 
 class Configuration(BaseModel):
+    # torch runs the original weights, onnx runs int8 ones: less memory, same vectors up to ~0.002
+    backend: Literal["torch", "onnx"] = "torch"
     device: str = "cpu"
     dtype: str = "float32"
     semaphore_count: int = Field(default=4, ge=1)

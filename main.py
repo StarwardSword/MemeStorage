@@ -11,7 +11,12 @@ if hasattr(os, "add_dll_directory") and FFMPEG_DIR.is_dir():
 from api import serve_grpc, serve_http
 from app import Application
 from configure import Configuration
-from infrastructure import ChromaStorage, GemmaEmbeddings, LocalFileStorage
+from infrastructure import (
+    ChromaStorage,
+    GemmaEmbeddings,
+    LocalFileStorage,
+    OnnxEmbeddings,
+)
 
 GRPC_STOP_GRACE = 5
 
@@ -20,8 +25,9 @@ config = Configuration()
 print("Initializing file storage")
 files = LocalFileStorage(config.files)
 
-print("Initializing gemma embedding model")
-embeddings = GemmaEmbeddings(config=config.gemma, file_storage=files)
+print(f"Initializing gemma embedding model ({config.gemma.backend})")
+provider = OnnxEmbeddings if config.gemma.backend == "onnx" else GemmaEmbeddings
+embeddings = provider(config=config.gemma, file_storage=files)
 
 print("Initializing chromadb")
 db = ChromaStorage(config.chroma)

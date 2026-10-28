@@ -4,7 +4,7 @@ import logging
 import sys
 from collections import OrderedDict
 from threading import Lock, Semaphore, Timer
-from typing import cast, override
+from typing import Any, Protocol, cast, override
 
 import numpy as np
 import torch
@@ -69,6 +69,10 @@ def token_to_key(token: str) -> str:
 Query = dict[str, str]
 
 
+class Encoder(Protocol):
+    def encode(self, inputs: Any, prompt_name: str | None, batch_size: int) -> Any: ...
+
+
 # Freed torch memory stays in glibc arenas and is not returned to the OS by itself,
 # without this the RSS barely drops after the model is unloaded
 def release_memory_to_os() -> None:
@@ -97,7 +101,7 @@ class GemmaEmbeddings(EmbeddingProvider):
 
         # Guards the model reference and the count of calls using it
         self._lock = Lock()
-        self._model: SentenceTransformer | None = None
+        self._model: Encoder | None = None
         self._users = 0
         self._timer: Timer | None = None
 
@@ -112,7 +116,7 @@ class GemmaEmbeddings(EmbeddingProvider):
         self._acquire()
         self._release()
 
-    def _load(self) -> SentenceTransformer:
+    def _load(self) -> Encoder:
         return SentenceTransformer(
             MODEL_NAME,
             device=self.config.device,
@@ -120,7 +124,7 @@ class GemmaEmbeddings(EmbeddingProvider):
             model_kwargs={"torch_dtype": self.config.dtype},
         )
 
-    def _acquire(self) -> SentenceTransformer:
+    def _acquire(self) -> Encoder:
         with self._lock:
             if self._timer is not None:
                 self._timer.cancel()
@@ -151,11 +155,11 @@ class GemmaEmbeddings(EmbeddingProvider):
             self._timer = None
         release_memory_to_os()
 
-    def _encode_single(self, query: Query, query_type: str) -> Embeddings:
+    def _encode_single(self, query: Query, query_type: str | None) -> Embeddings:
         return self._encode_multiple([query], query_type)[0]
 
     def _encode_multiple(
-        self, queries: list[Query], query_type: str
+        self, queries: list[Query], query_type: str | None
     ) -> list[Embeddings]:
         with self.semaphore:
             model = self._acquire()
@@ -188,7 +192,8 @@ class GemmaEmbeddings(EmbeddingProvider):
                 {Key.TEXT: str(item[TOKEN]), token_to_key(item[TOKEN]): item[NAME]}
                 for item in tokens
             ],
-            DOCUMENT,
+            # The model card says prefixes are for text only, files go in as they are
+            None,
         )
 
     def _document_text(self, items: list[str]) -> list[Embeddings]:
