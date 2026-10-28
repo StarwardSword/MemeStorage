@@ -2,20 +2,42 @@ syntax = "proto3";
 
 package api;
 
-// Errors come as gRPC status codes, details hold a human readable message
+// Errors come as gRPC status codes, details hold a human readable message.
+//
+// Every call needs the metadata `authorization: Bearer <token>`: the token of a user or the admin token.
+// UNAUTHENTICATED: the token is missing, wrong or revoked.
+// PERMISSION_DENIED: the admin calls (the last group below) with a user token.
 service MemeStorage {
     // Saved file uuid is not returned, the file is found by search.
     // INVALID_ARGUMENT: first message is not info or a later one is not data,
     //   content type is not image/*, video/* or audio/* or can not be guessed by file name,
     //   embeddings or text_embeddings dimension does not match the model
+    // Ready embeddings (embeddings, text_embeddings) are accepted only from users with allow_embeddings.
+    // PERMISSION_DENIED: ready embeddings from a user who may not send them
     // INTERNAL: file storage, embedding model or vector storage failed, nothing is stored
+    // RESOURCE_EXHAUSTED: the file is larger or longer than the server limit, nothing is stored
     rpc Save(stream SaveRequest) returns (SaveResponse);
 
     // Each info message starts a new file, data messages after it are its contents.
-    // A file that can not be saved, including an unsupported content type or a wrong embeddings
-    //   dimension, goes to failed instead of failing the call. Uuids of saved files are not returned.
+    // A file that can not be saved, including an unsupported content type, a wrong embeddings
+    //   dimension or ready embeddings without a valid key (FORBIDDEN), goes to failed instead of failing the call. Uuids of saved files are not returned.
     // INVALID_ARGUMENT: first message is not info
     rpc SaveMultiple(stream SaveMultipleRequest) returns (SaveMultipleResponse);
+
+    // Like Save, but the file is only stored here and indexed in the background.
+    // The answer holds a job uuid, which is also the uuid of the file: GetJob tells when it is searchable.
+    // Ready embeddings follow the same key rule as in Save and are indexed with the file.
+    // INVALID_ARGUMENT, PERMISSION_DENIED: as in Save
+    // RESOURCE_EXHAUSTED: the file is larger or longer than the server limit, or the queue is full
+    rpc Submit(stream SaveRequest) returns (SubmitResponse);
+
+    // Like SaveMultiple, but the files are only stored and indexed in the background.
+    // A file that is refused, including a full queue, goes to failed instead of failing the call.
+    rpc SubmitMultiple(stream SaveMultipleRequest) returns (SubmitMultipleResponse);
+
+    // INVALID_ARGUMENT: uuid is malformed
+    // NOT_FOUND: there is no job with this uuid
+    rpc GetJob(UUIDRequest) returns (JobResponse);
 
     // INVALID_ARGUMENT: uuid is malformed
     // NOT_FOUND: there is no file with this uuid
@@ -30,6 +52,35 @@ service MemeStorage {
     //   record_count is less than 1 or greater than max_records from the server config
     // INTERNAL: found files are missing from file storage
     rpc GetByQuery(QueryRequest) returns (MultipleIdResponse);
+
+    // --- Admin calls, only with the admin token. Time is Unix seconds.
+
+    // ALREADY_EXISTS: the name is taken, also by a deleted user
+    // INVALID_ARGUMENT: the name is empty, too long or has odd characters
+    // The token in the answer is shown once.
+    rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+
+    // Oldest first, deleted users included.
+    rpc ListUsers(Empty) returns (ListUsersResponse);
+
+    // NOT_FOUND: there is no such user, or it is deleted
+    rpc UpdateUser(UpdateUserRequest) returns (UserInfo);
+
+    // Revokes the token at once, the files of the user and the statistics stay.
+    // NOT_FOUND: there is no such user, or it is deleted
+    rpc DeleteUser(UUIDRequest) returns (Empty);
+
+    // A new token, the old one stops working at once. A deleted user is brought back by it:
+    //   it is active again and `restored` is set.
+    // NOT_FOUND: there is no such user
+    rpc RotateToken(UUIDRequest) returns (TokenResponse);
+
+    // Stored files of each user by image, video and audio.
+    rpc GetStats(Empty) returns (StatsResponse);
+
+    // What the server saw in a period: requests, outcomes, timings, traffic, popular queries.
+    // UNAVAILABLE: the activity log is turned off in the config
+    rpc GetActivity(ActivityRequest) returns (ActivityResponse);
 }
 
 
@@ -77,6 +128,10 @@ message SaveFailure {
         // Includes a wrong embeddings dimension
         EMBEDDING_MODEL = 3;
         VECTOR_STORAGE = 4;
+        // The file is larger or longer than the server limit, or the batch or the queue is full
+        LIMIT_EXCEEDED = 5;
+        // The file came with ready embeddings, but the call has no valid x-embeddings-key metadata
+        FORBIDDEN = 6;
     }
 
     Kind kind = 1;
@@ -88,6 +143,39 @@ message SaveFailure {
 message SaveMultipleResponse {
     // Files that were not saved, the rest are saved
     repeated SaveFailure failed = 1;
+}
+
+
+// Submit, SubmitMultiple, GetJob
+message SubmitResponse {
+    string uuid = 1;
+}
+
+message SubmittedFile {
+    string uuid = 1;
+    string filename = 2;
+}
+
+message SubmitMultipleResponse {
+    repeated SubmittedFile jobs = 1;
+    // Files that were refused, the rest are queued
+    repeated SaveFailure failed = 2;
+}
+
+message JobResponse {
+    enum Status {
+        STATUS_UNSPECIFIED = 0;
+        PENDING = 1;
+        RUNNING = 2;
+        // The file is searchable
+        DONE = 3;
+        // The file was removed, error tells why
+        FAILED = 4;
+    }
+
+    Status status = 1;
+    string original_name = 2;
+    optional SaveFailure error = 3;
 }
 
 
@@ -128,4 +216,125 @@ message MultipleIds {
 
 message MultipleIdResponse {
     repeated MultipleIds result = 1;
+}
+
+
+// Admin
+
+message Empty {}
+
+message UserInfo {
+    string uuid = 1;
+    string name = 2;
+    bool allow_embeddings = 3;
+    double created_at = 4;
+    // Set for a deleted user
+    optional double deleted_at = 5;
+}
+
+message CreateUserRequest {
+    string name = 1;
+    bool allow_embeddings = 2;
+}
+
+message CreateUserResponse {
+    UserInfo user = 1;
+    string token = 2;
+}
+
+message ListUsersResponse {
+    repeated UserInfo users = 1;
+}
+
+message UpdateUserRequest {
+    string uuid = 1;
+    bool allow_embeddings = 2;
+}
+
+message TokenResponse {
+    string token = 1;
+    // The user was deleted and is active again with this token
+    bool restored = 2;
+}
+
+message TypeUsage {
+    int64 files = 1;
+    int64 bytes = 2;
+}
+
+message UserStats {
+    // Empty for files with no owner: uploaded by the admin or before users existed
+    string uuid = 1;
+    string name = 2;
+    bool deleted = 3;
+    int64 files = 4;
+    int64 bytes = 5;
+    // Keyed by image, video and audio
+    map<string, TypeUsage> by_type = 6;
+    optional double last_upload = 7;
+}
+
+message StatsResponse {
+    repeated UserStats users = 1;
+    int64 files = 2;
+    int64 bytes = 3;
+}
+
+message ActivityRequest {
+    // Seven days ago when not set
+    optional double since = 1;
+    // Now when not set
+    optional double until = 2;
+}
+
+message ActionStats {
+    string action = 1;
+    int64 requests = 2;
+    int64 ok = 3;
+    int64 denied = 4;
+    int64 client_error = 5;
+    int64 server_error = 6;
+    double avg_ms = 7;
+    double p95_ms = 8;
+    double max_ms = 9;
+    int64 bytes_in = 10;
+    int64 bytes_out = 11;
+}
+
+message ActorStats {
+    string uuid = 1;
+    string actor = 2;
+    int64 requests = 3;
+    int64 errors = 4;
+    int64 bytes_in = 5;
+    int64 bytes_out = 6;
+    double first_seen = 7;
+    double last_seen = 8;
+}
+
+message QueryCount {
+    string query = 1;
+    int64 count = 2;
+}
+
+message ActivityResponse {
+    double since = 1;
+    double until = 2;
+    int64 requests = 3;
+    int64 ok = 4;
+    int64 denied = 5;
+    int64 client_error = 6;
+    int64 server_error = 7;
+    double avg_ms = 8;
+    int64 bytes_in = 9;
+    int64 bytes_out = 10;
+    map<string, int64> by_transport = 11;
+    repeated ActionStats by_action = 12;
+    repeated ActorStats by_actor = 13;
+    repeated QueryCount top_queries = 14;
+    // Background jobs by status, and why the failed ones failed
+    map<string, int64> jobs_by_status = 15;
+    map<string, int64> job_failures = 16;
+    // Events lost because the log writer could not keep up
+    int64 dropped = 17;
 }

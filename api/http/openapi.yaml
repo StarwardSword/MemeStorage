@@ -24,6 +24,12 @@ paths:
       responses:
         '204':
           description: File stored
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '400':
           description: File part has no file name
           content:
@@ -32,6 +38,19 @@ paths:
                 $ref: '#/components/schemas/Error'
         '415':
           description: File is not an image, video or audio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Ready embeddings were sent, but the user may not upload them
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: The file is larger or longer than the server limit, nothing
+            is stored
           content:
             application/json:
               schema:
@@ -49,6 +68,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
   /files/batch:
     post:
       tags:
@@ -74,6 +95,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SaveMultipleResponse'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '400':
           description: A file part has no file name, nothing is stored
           content:
@@ -86,14 +113,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
   /files/{file_id}:
     get:
       tags:
       - files
       summary: Download a file
-      description: Streams file contents with its stored content type. `Content-Disposition`
-        carries the original file name.
+      description: Sends file contents with its stored content type, byte ranges are
+        supported. `Content-Disposition` carries the original file name.
       operationId: get_file
+      security:
+      - HTTPBearer: []
       parameters:
       - name: file_id
         in: path
@@ -129,6 +160,12 @@ paths:
               description: File size in bytes
               schema:
                 type: integer
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: File not found
           content:
@@ -147,6 +184,8 @@ paths:
       - files
       summary: Get file info
       operationId: get_file_info
+      security:
+      - HTTPBearer: []
       parameters:
       - name: file_id
         in: path
@@ -162,8 +201,165 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FileInfo'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /jobs:
+    post:
+      tags:
+      - jobs
+      summary: Upload a file and index it later
+      description: 'Stores the file and answers at once, embedding runs in the background.
+        Poll `GET /jobs/{id}`: the file is searchable when the status is `done`. Precomputed
+        embeddings need the key, as in `POST /files`. Jobs that were queued survive
+        a server restart.'
+      operationId: submit_file
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_submit_file'
+        required: true
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAccepted'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '400':
+          description: File part has no file name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: File is not an image, video or audio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Ready embeddings were sent, but the user may not upload them
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: The file is larger or longer than the server limit, nothing
+            is stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: The queue is full, try again later
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
+  /jobs/batch:
+    post:
+      tags:
+      - jobs
+      summary: Upload several files and index them later
+      description: Like `POST /jobs` for many files. A file that is refused, because
+        of its type, size, length or a full queue, goes to `failed` and does not fail
+        the request.
+      operationId: submit_files
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_submit_files'
+        required: true
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitMultipleResponse'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '400':
+          description: A file part has no file name, nothing is stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
+  /jobs/{job_id}:
+    get:
+      tags:
+      - jobs
+      summary: Get job status
+      operationId: get_job
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Job Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobInfo'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Job not found
           content:
             application/json:
               schema:
@@ -181,6 +377,8 @@ paths:
       summary: Search by a text query
       description: Shorthand for `POST /search/query` with a single query.
       operationId: search_files
+      security:
+      - HTTPBearer: []
       parameters:
       - name: q
         in: query
@@ -209,6 +407,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FileList'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '422':
           description: Validation Error
           content:
@@ -236,12 +440,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SearchResponse'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '422':
           description: Validation Error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
   /search/embeddings:
     post:
       tags:
@@ -263,6 +475,553 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SearchResponse'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
+  /admin/users:
+    get:
+      tags:
+      - admin
+      summary: List users
+      description: Oldest first, deleted users included.
+      operationId: list_users
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/User'
+                type: array
+                title: Response List Users
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+      - HTTPBearer: []
+    post:
+      tags:
+      - admin
+      summary: Create a user
+      description: 'The token in the answer is shown once, only its hash is stored.
+        Lost token: `POST /admin/users/{id}/token` makes a new one.'
+      operationId: create_user
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCreated'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The name is taken, also by a deleted user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
+  /admin/users/{user_id}:
+    patch:
+      tags:
+      - admin
+      summary: Change a user
+      operationId: update_user
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: User Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No such user, or it is deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - admin
+      summary: Delete a user
+      description: Revokes the token at once. The files of the user and the statistics
+        stay.
+      operationId: delete_user
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: User Id
+      responses:
+        '204':
+          description: Successful Response
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No such user, or it is deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/users/{user_id}/token:
+    post:
+      tags:
+      - admin
+      summary: Make a new token for a user
+      description: 'The old token stops working at once. For a deleted user this is
+        how to bring it back: it becomes active again with the new token, `restored`
+        says so. Its files and statistics were never touched.'
+      operationId: rotate_token
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No such user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/stats:
+    get:
+      tags:
+      - admin
+      summary: Stored files by user
+      description: How many files and bytes each user uploaded and still has, by image,
+        video and audio. Users with no files are in the list too. Files with no owner
+        (uploaded by the admin or before users existed) are listed with a null user
+        id.
+      operationId: stats
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+      - HTTPBearer: []
+  /admin/activity/summary:
+    get:
+      tags:
+      - admin
+      summary: What happened
+      description: 'Everything the server saw in the period: requests by action, user,
+        day, transport and IP, outcomes, timings, traffic, the most popular search
+        queries and the state of background jobs.'
+      operationId: activity_summary
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: since
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: number
+          - type: 'null'
+          description: Start of the period, Unix seconds. Seven days ago when omitted
+          title: Since
+        description: Start of the period, Unix seconds. Seven days ago when omitted
+      - name: until
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: number
+          - type: 'null'
+          description: End of the period, Unix seconds. Now when omitted
+          title: Until
+        description: End of the period, Unix seconds. Now when omitted
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivitySummary'
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: The activity log is turned off in the config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/activity/events:
+    get:
+      tags:
+      - admin
+      summary: Event log
+      description: One entry per request or finished job, newest first.
+      operationId: activity_events
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: since
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: number
+          - type: 'null'
+          description: Start of the period, Unix seconds. Seven days ago when omitted
+          title: Since
+        description: Start of the period, Unix seconds. Seven days ago when omitted
+      - name: until
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: number
+          - type: 'null'
+          description: End of the period, Unix seconds. Now when omitted
+          title: Until
+        description: End of the period, Unix seconds. Now when omitted
+      - name: user_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          description: Only this user
+          title: User Id
+        description: Only this user
+      - name: action
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Handler name, as in the summary
+          title: Action
+        description: Handler name, as in the summary
+      - name: outcome
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^(ok|denied|client_error|server_error)$
+          - type: 'null'
+          title: Outcome
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+                title: Response Activity Events
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: The activity log is turned off in the config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/files:
+    get:
+      tags:
+      - admin
+      summary: Stored files
+      description: Newest first, with the owner, size and upload time.
+      operationId: list_files
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: owner_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          description: Only files of this user
+          title: Owner Id
+        description: Only files of this user
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileRecord'
+                title: Response List Files
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/files/{file_id}:
+    delete:
+      tags:
+      - admin
+      summary: Delete a file
+      description: Removes the file from the disk and from the search index.
+      operationId: delete_file
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: File Id
+      responses:
+        '204':
+          description: Successful Response
+        '401':
+          description: Missing, wrong or revoked token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token is a user token, not the admin one
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '422':
           description: Validation Error
           content:
@@ -284,6 +1043,187 @@ paths:
                 $ref: '#/components/schemas/Health'
 components:
   schemas:
+    ActionStats:
+      properties:
+        action:
+          type: string
+          title: Action
+        requests:
+          type: integer
+          title: Requests
+        ok:
+          type: integer
+          title: Ok
+        denied:
+          type: integer
+          title: Denied
+        client_error:
+          type: integer
+          title: Client Error
+        server_error:
+          type: integer
+          title: Server Error
+        avg_ms:
+          type: number
+          title: Avg Ms
+        p95_ms:
+          type: number
+          title: P95 Ms
+        max_ms:
+          type: number
+          title: Max Ms
+        bytes_in:
+          type: integer
+          title: Bytes In
+        bytes_out:
+          type: integer
+          title: Bytes Out
+      type: object
+      required:
+      - action
+      - requests
+      - ok
+      - denied
+      - client_error
+      - server_error
+      - avg_ms
+      - p95_ms
+      - max_ms
+      - bytes_in
+      - bytes_out
+      title: ActionStats
+    ActivitySummary:
+      properties:
+        since:
+          type: number
+          title: Since
+        until:
+          type: number
+          title: Until
+        requests:
+          type: integer
+          title: Requests
+        ok:
+          type: integer
+          title: Ok
+        denied:
+          type: integer
+          title: Denied
+        client_error:
+          type: integer
+          title: Client Error
+        server_error:
+          type: integer
+          title: Server Error
+        avg_ms:
+          type: number
+          title: Avg Ms
+        bytes_in:
+          type: integer
+          title: Bytes In
+        bytes_out:
+          type: integer
+          title: Bytes Out
+        by_transport:
+          additionalProperties:
+            type: integer
+          type: object
+          title: By Transport
+        by_action:
+          items:
+            $ref: '#/components/schemas/ActionStats'
+          type: array
+          title: By Action
+        by_actor:
+          items:
+            $ref: '#/components/schemas/ActorStats'
+          type: array
+          title: By Actor
+        by_day:
+          items:
+            $ref: '#/components/schemas/DayStats'
+          type: array
+          title: By Day
+        top_queries:
+          items:
+            $ref: '#/components/schemas/QueryCount'
+          type: array
+          title: Top Queries
+        by_ip:
+          items:
+            $ref: '#/components/schemas/IpStats'
+          type: array
+          title: By Ip
+        jobs:
+          $ref: '#/components/schemas/JobCounts'
+          default:
+            by_status: {}
+            failures: {}
+        dropped:
+          type: integer
+          title: Dropped
+          default: 0
+      type: object
+      required:
+      - since
+      - until
+      - requests
+      - ok
+      - denied
+      - client_error
+      - server_error
+      - avg_ms
+      - bytes_in
+      - bytes_out
+      - by_transport
+      - by_action
+      - by_actor
+      - by_day
+      - top_queries
+      - by_ip
+      title: ActivitySummary
+    ActorStats:
+      properties:
+        user_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: User Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        requests:
+          type: integer
+          title: Requests
+        errors:
+          type: integer
+          title: Errors
+        bytes_in:
+          type: integer
+          title: Bytes In
+        bytes_out:
+          type: integer
+          title: Bytes Out
+        first_seen:
+          type: number
+          title: First Seen
+        last_seen:
+          type: number
+          title: Last Seen
+      type: object
+      required:
+      - user_id
+      - actor
+      - requests
+      - errors
+      - bytes_in
+      - bytes_out
+      - first_seen
+      - last_seen
+      title: ActorStats
     Body_save_file:
       properties:
         file:
@@ -339,6 +1279,86 @@ components:
       required:
       - files
       title: Body_save_files
+    Body_submit_file:
+      properties:
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          title: File
+          description: Image, video or audio file
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+          description: Text description, the file is also found by it
+        embeddings:
+          anyOf:
+          - type: string
+            contentMediaType: application/json
+            contentSchema:
+              items:
+                type: number
+              type: array
+              minItems: 1
+          - type: 'null'
+          title: Embeddings
+          description: Precomputed file embedding as a JSON array of numbers, computed
+            by the server when omitted
+        text_embeddings:
+          anyOf:
+          - type: string
+            contentMediaType: application/json
+            contentSchema:
+              items:
+                type: number
+              type: array
+              minItems: 1
+          - type: 'null'
+          title: Text Embeddings
+          description: Precomputed description embedding as a JSON array of numbers
+      type: object
+      required:
+      - file
+      title: Body_submit_file
+    Body_submit_files:
+      properties:
+        files:
+          items:
+            type: string
+            contentMediaType: application/octet-stream
+          type: array
+          title: Files
+          description: Image, video or audio files
+      type: object
+      required:
+      - files
+      title: Body_submit_files
+    DayStats:
+      properties:
+        day:
+          type: string
+          title: Day
+        requests:
+          type: integer
+          title: Requests
+        errors:
+          type: integer
+          title: Errors
+        bytes_in:
+          type: integer
+          title: Bytes In
+        bytes_out:
+          type: integer
+          title: Bytes Out
+      type: object
+      required:
+      - day
+      - requests
+      - errors
+      - bytes_in
+      - bytes_out
+      title: DayStats
     EmbeddingSearchRequest:
       properties:
         embeddings:
@@ -372,6 +1392,78 @@ components:
       required:
       - detail
       title: Error
+    Event:
+      properties:
+        ts:
+          type: number
+          title: Ts
+        transport:
+          type: string
+          enum:
+          - http
+          - grpc
+          - worker
+          title: Transport
+        action:
+          type: string
+          title: Action
+        code:
+          type: string
+          title: Code
+        outcome:
+          type: string
+          enum:
+          - ok
+          - denied
+          - client_error
+          - server_error
+          title: Outcome
+        user_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: User Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        duration_ms:
+          type: number
+          title: Duration Ms
+          default: 0
+        bytes_in:
+          type: integer
+          title: Bytes In
+          default: 0
+        bytes_out:
+          type: integer
+          title: Bytes Out
+          default: 0
+        ip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip
+        path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Path
+        detail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Detail
+      type: object
+      required:
+      - ts
+      - transport
+      - action
+      - code
+      - outcome
+      title: Event
     FileInfo:
       properties:
         id:
@@ -402,6 +1494,42 @@ components:
       required:
       - items
       title: FileList
+    FileRecord:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        original_name:
+          type: string
+          title: Original Name
+        content_type:
+          type: string
+          title: Content Type
+        owner_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Owner Id
+        size:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Size
+        created_at:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Created At
+      type: object
+      required:
+      - id
+      - original_name
+      - content_type
+      title: FileRecord
+      description: What the admin sees about a stored file. Files stored before owners
+        existed have no size and time
     HTTPValidationError:
       properties:
         detail:
@@ -420,6 +1548,93 @@ components:
           default: ok
       type: object
       title: Health
+    IpStats:
+      properties:
+        ip:
+          type: string
+          title: Ip
+        requests:
+          type: integer
+          title: Requests
+        denied:
+          type: integer
+          title: Denied
+      type: object
+      required:
+      - ip
+      - requests
+      - denied
+      title: IpStats
+    JobAccepted:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+          description: 'Job id, it is also the id of the stored file: `GET /jobs/{id}`
+            tells when it is searchable'
+      type: object
+      required:
+      - id
+      title: JobAccepted
+    JobCounts:
+      properties:
+        by_status:
+          additionalProperties:
+            type: integer
+          type: object
+          title: By Status
+          default: {}
+        failures:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Failures
+          default: {}
+      type: object
+      title: JobCounts
+    JobInfo:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        original_name:
+          type: string
+          title: Original Name
+        status:
+          type: string
+          enum:
+          - pending
+          - running
+          - done
+          - failed
+          title: Status
+          description: '`pending` waits in the queue, `running` is being indexed,
+            `done` is searchable, `failed` was removed and `error` tells why'
+        error:
+          anyOf:
+          - $ref: '#/components/schemas/SaveFailure'
+          - type: 'null'
+      type: object
+      required:
+      - id
+      - original_name
+      - status
+      title: JobInfo
+    QueryCount:
+      properties:
+        query:
+          type: string
+          title: Query
+        count:
+          type: integer
+          title: Count
+      type: object
+      required:
+      - query
+      - count
+      title: QueryCount
     QuerySearchRequest:
       properties:
         queries:
@@ -451,10 +1666,12 @@ components:
           - file_storage
           - embedding_model
           - vector_storage
+          - limit_exceeded
           title: Kind
           description: 'Stage that failed. `unsupported_type`: the file is not an
             image, video or audio and was not passed to the application; `embedding_model`
-            includes a wrong embedding dimension'
+            includes a wrong embedding dimension; `limit_exceeded`: the file is too
+            big or too long, or the batch or the queue is full'
         message:
           type: string
           title: Message
@@ -489,6 +1706,197 @@ components:
       required:
       - results
       title: SearchResponse
+    Stats:
+      properties:
+        users:
+          items:
+            $ref: '#/components/schemas/UserStats'
+          type: array
+          title: Users
+        files:
+          type: integer
+          title: Files
+        bytes:
+          type: integer
+          title: Bytes
+      type: object
+      required:
+      - users
+      - files
+      - bytes
+      title: Stats
+    SubmitMultipleResponse:
+      properties:
+        jobs:
+          items:
+            $ref: '#/components/schemas/SubmittedFile'
+          type: array
+          title: Jobs
+          description: Files that were queued
+        failed:
+          items:
+            $ref: '#/components/schemas/SaveFailure'
+          type: array
+          title: Failed
+          description: Files that were refused, the rest are queued
+      type: object
+      required:
+      - jobs
+      - failed
+      title: SubmitMultipleResponse
+    SubmittedFile:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+          description: 'Job id, it is also the id of the stored file: `GET /jobs/{id}`
+            tells when it is searchable'
+        filename:
+          type: string
+          title: Filename
+      type: object
+      required:
+      - id
+      - filename
+      title: SubmittedFile
+    TokenResponse:
+      properties:
+        token:
+          type: string
+          title: Token
+          description: New token, the old one does not work anymore
+        restored:
+          type: boolean
+          title: Restored
+          description: The user was deleted and is active again with this token
+      type: object
+      required:
+      - token
+      - restored
+      title: TokenResponse
+    TypeUsage:
+      properties:
+        files:
+          type: integer
+          title: Files
+          default: 0
+        bytes:
+          type: integer
+          title: Bytes
+          default: 0
+      type: object
+      title: TypeUsage
+    User:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        name:
+          type: string
+          title: Name
+        allow_embeddings:
+          type: boolean
+          title: Allow Embeddings
+          default: false
+        created_at:
+          type: number
+          title: Created At
+        deleted_at:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Deleted At
+      type: object
+      required:
+      - id
+      - name
+      - created_at
+      title: User
+    UserCreate:
+      properties:
+        name:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Name
+          description: Letters, digits, spaces, dots and dashes. Unique, a deleted
+            user keeps its name
+        allow_embeddings:
+          type: boolean
+          title: Allow Embeddings
+          description: May upload ready embeddings. They go into the index as they
+            are, so give it to trusted users
+          default: false
+      type: object
+      required:
+      - name
+      title: UserCreate
+    UserCreated:
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        token:
+          type: string
+          title: Token
+          description: 'Token of the user for `Authorization: Bearer`. Shown only
+            now'
+      type: object
+      required:
+      - user
+      - token
+      title: UserCreated
+    UserStats:
+      properties:
+        user_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: User Id
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        deleted:
+          type: boolean
+          title: Deleted
+          default: false
+        files:
+          type: integer
+          title: Files
+          default: 0
+        bytes:
+          type: integer
+          title: Bytes
+          default: 0
+        by_type:
+          additionalProperties:
+            $ref: '#/components/schemas/TypeUsage'
+          type: object
+          title: By Type
+          default: {}
+        last_upload:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Last Upload
+      type: object
+      required:
+      - user_id
+      - name
+      title: UserStats
+    UserUpdate:
+      properties:
+        allow_embeddings:
+          type: boolean
+          title: Allow Embeddings
+      type: object
+      required:
+      - allow_embeddings
+      title: UserUpdate
     ValidationError:
       properties:
         loc:
@@ -515,3 +1923,8 @@ components:
       - msg
       - type
       title: ValidationError
+  securitySchemes:
+    HTTPBearer:
+      type: http
+      description: Token of a user or the admin token
+      scheme: bearer
