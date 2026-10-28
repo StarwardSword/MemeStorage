@@ -57,8 +57,14 @@ class LocalFileStorage(FileStorage):
         meta = self.database.get(id)
 
         filename = Path(self.root, str(id))
-        f = open(filename, "rb")
-        st = stat(f.fileno())
+        # Opened here so a missing file fails before the response starts,
+        # the generator below owns and closes it once iteration begins
+        f = open(filename, "rb")  # noqa: SIM115
+        try:
+            st = stat(f.fileno())
+        except BaseException:
+            f.close()
+            raise
 
         return StoredFile(
             id=id,

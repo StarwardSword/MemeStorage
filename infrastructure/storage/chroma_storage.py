@@ -2,6 +2,7 @@ import uuid
 
 import chromadb
 import numpy as np
+from chromadb.config import Settings
 
 from app import Embeddings, Record, RecordNotFoundError, Storage
 
@@ -10,7 +11,9 @@ from .config import Configuration
 
 class ChromaStorage(Storage):
     def __init__(self, config: Configuration) -> None:
-        self.client = chromadb.PersistentClient(path=config.path)
+        self.client = chromadb.PersistentClient(
+            path=config.path, settings=Settings(anonymized_telemetry=False)
+        )
         self.primary_collection = self.client.get_or_create_collection("memes_primary")
         self.text_description_collection = self.client.get_or_create_collection(
             "memes_text_description"
@@ -20,9 +23,9 @@ class ChromaStorage(Storage):
         # Chroma refuses empty add, a batch where every file failed comes here empty
         if not records:
             return
-        if any([x for x in records if x.embedding is None]):
+        if any(x.embedding is None for x in records):
             raise ValueError(
-                f"ChromaStorage.save got record with primary embeddings None"
+                "ChromaStorage.save got record with primary embeddings None"
             )
 
         ids = [str(r.id) for r in records]
@@ -37,9 +40,9 @@ class ChromaStorage(Storage):
         )
 
         # WARN: If something goes wrong THIS thing is bugged
-        non_null_secondary_idx = set(
-            [i for (i, x) in enumerate(records) if x.text_description is not None]
-        )
+        non_null_secondary_idx = {
+            i for (i, x) in enumerate(records) if x.text_description is not None
+        }
         if not non_null_secondary_idx:
             return
 
@@ -118,35 +121,26 @@ class ChromaStorage(Storage):
         query = collection.query(
             np.asarray(embeddings),
             n_results=n_records,
-            include=["documents", "distances"],
+            # Descriptions are not needed to find files, only ids and distances
+            include=["distances"],
         )
-        if query["documents"] is None:
-            raise Exception("chroma: can not load documents")
         if query["distances"] is None:
             raise Exception("chroma: can not load distances")
 
-        ID, DIST, DOC = 0, 1, 2
-        items = [
-            (id_, distance, doc)
-            for id_, doc, distance in zip(
-                query["ids"], query["documents"], query["distances"]
-            )
-        ]
-
         #                       Record, Dist
         records: list[list[tuple[Record, float]]] = []
-        for embedding_results in items:
+        for ids, distances in zip(query["ids"], query["distances"]):
             batch: list[tuple[Record, float]] = [
                 (
                     Record(
-                        id=uuid.UUID(embedding_results[ID][idx]),
+                        id=uuid.UUID(id_),
                         embedding=None,
-                        text_description=embedding_results[DOC][idx],
+                        text_description=None,
                         text_embedding=None,
                     ),
-                    embedding_results[DIST][idx],
+                    distance,
                 )
-                for idx in range(len(embedding_results[ID]))
+                for id_, distance in zip(ids, distances)
             ]
 
             records.append(batch)

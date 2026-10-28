@@ -10,6 +10,9 @@ class SqliteDatabase:
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.connection_string)
         conn.row_factory = sqlite3.Row
+        # With WAL a commit then does not wait for fsync; a power loss may drop the last commits
+        # but never corrupts the database, and the file is not worth more than that
+        conn.execute("PRAGMA synchronous = NORMAL")
         return conn
 
     def __init__(self, connection_string: str) -> None:
