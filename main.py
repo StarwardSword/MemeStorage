@@ -9,13 +9,17 @@ if hasattr(os, "add_dll_directory") and FFMPEG_DIR.is_dir():
     ffmpeg_dlls = os.add_dll_directory(str(FFMPEG_DIR))
 
 from api import serve_grpc, serve_http
-from app import Application
+from app import ActivityRecorder, Application
 from configure import Configuration
 from infrastructure import (
     ChromaStorage,
     GemmaEmbeddings,
     LocalFileStorage,
+    LocalMediaProbe,
     OnnxEmbeddings,
+    SqliteActivityStore,
+    SqliteJobStore,
+    SqliteUserStore,
 )
 
 GRPC_STOP_GRACE = 5
@@ -32,12 +36,24 @@ embeddings = provider(config=config.gemma, file_storage=files)
 print("Initializing chromadb")
 db = ChromaStorage(config.chroma)
 
+print("Initializing job queue")
+jobs = SqliteJobStore(config.files.sqlite_connection_string)
+
 app = Application(
     embedding_provider=embeddings,
     storage=db,
     file_storage=files,
     configuration=config.app,
+    jobs=jobs,
+    users=SqliteUserStore(config.files.sqlite_connection_string),
+    auth=config.auth,
+    limits=config.limits,
+    media_probe=LocalMediaProbe(),
+    activity=ActivityRecorder(
+        SqliteActivityStore(config.files.sqlite_connection_string), config.activity
+    ),
 )
+app.start()
 
 grpc_server = None
 if config.grpc is not None:
@@ -56,6 +72,7 @@ try:
 except KeyboardInterrupt:
     pass
 finally:
+    app.stop()
     if grpc_server is not None:
         print("Stopping grpc")
         grpc_server.stop(GRPC_STOP_GRACE).wait()

@@ -5,7 +5,7 @@ from os import stat
 from pathlib import Path
 from typing import Generator, override
 
-from app import FileDescriptor, FileStorage, StoredFile
+from app import FileDescriptor, FileRecord, FileStorage, OwnerUsage, StoredFile
 
 from .config import Configuration
 from .database import SqliteDatabase
@@ -25,19 +25,23 @@ class LocalFileStorage(FileStorage):
 
     @override
     def save(self, file: StoredFile) -> Path:
-        self.database.save(
-            FileDescriptor(
-                id=file.id,
-                original_name=file.original_name,
-                content_type=file.content_type,
-            )
-        )
-
         path = Path(self.root, str(file.id))
         try:
+            size = 0
             with open(path, "wb") as f:
                 for d in file.data:
                     f.write(d)
+                    size += len(d)
+            # Seen by others only when the file is complete
+            self.database.save(
+                FileDescriptor(
+                    id=file.id,
+                    original_name=file.original_name,
+                    content_type=file.content_type,
+                ),
+                file.owner_id,
+                size,
+            )
         except Exception:
             self.database.remove(file.id)
 
@@ -87,6 +91,16 @@ class LocalFileStorage(FileStorage):
     @override
     def descriptors(self, ids: list[uuid.UUID]) -> list[FileDescriptor]:
         return self.database.get_multiple(ids)
+
+    @override
+    def usage(self) -> list[OwnerUsage]:
+        return self.database.usage()
+
+    @override
+    def list_files(
+        self, owner_id: uuid.UUID | None, limit: int, offset: int
+    ) -> list[FileRecord]:
+        return self.database.list_files(owner_id, limit, offset)
 
     @override
     def remove(self, id: uuid.UUID):

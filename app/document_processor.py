@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Callable
 from enum import Enum
 from mimetypes import guess_type
 from pathlib import Path
@@ -12,6 +13,8 @@ from .embeddings import (
 )
 from .file_storage import FileStorage
 from .file_storage_models import FileDescriptor, StoredFile
+from .limits import LimitExceededError, Limits, limited
+from .media import MediaProbe
 from .storage import Record, Storage
 
 
@@ -22,10 +25,14 @@ class DocumentProcessor:
         embedding_provider: EmbeddingProvider,
         storage: Storage,
         save_strategy: str,
+        limits: Limits | None = None,
+        media_probe: MediaProbe | None = None,
     ) -> None:
         self.file_storage = file_storage
         self.embedding_provider = embedding_provider
         self.storage = storage
+        self.limits = limits or Limits()
+        self.media_probe = media_probe
 
         if save_strategy == "safe":
             self._embeddings = self._safe_batch_embedding
@@ -145,16 +152,36 @@ class DocumentProcessor:
             for (id, name) in failed
         ]
 
+    # reserve is asked for a place before each file is read and says no when there is none,
+    # such a file and the ones after it are refused
     def _save_to_file_storage(
-        self, msgs: Iterator[SaveMessage]
+        self, msgs: Iterator[SaveMessage], reserve: Callable[[], bool] | None = None
     ) -> tuple[list[FileDescriptor], list[SaveMessage], list[FailureReport]]:
         res: list[FileDescriptor] = []
         fails: list[FailureReport] = []
         messages: list[SaveMessage] = []
 
-        for msg in msgs:
+        for number, msg in enumerate(msgs, start=1):
             id = uuid.uuid7()
             original_name = Path(msg.original_name).name
+
+            refusal = None
+            if (
+                self.limits.max_batch_files is not None
+                and number > self.limits.max_batch_files
+            ):
+                refusal = f"batch is limited to {self.limits.max_batch_files} files"
+            elif reserve is not None and not reserve():
+                refusal = "queue is full"
+            if refusal is not None:
+                fails.append(
+                    FailureReport(
+                        item_id=id,
+                        kind=FailureKind.LIMIT_EXCEEDED,
+                        value=f"{original_name}: {refusal}",
+                    )
+                )
+                continue
 
             if msg.content_type is None:
                 msg.content_type = guess_type(original_name)[0]
@@ -173,13 +200,23 @@ class DocumentProcessor:
                 self.file_storage.save(
                     StoredFile(
                         id=id,
-                        data=msg.data,
+                        data=limited(msg.data, self.limits.max_bytes(msg.content_type)),
                         content_type=msg.content_type,
                         original_name=original_name,
+                        owner_id=msg.owner_id,
                     )
                 )
             except KeyboardInterrupt:
                 raise
+            except LimitExceededError as e:
+                fails.append(
+                    FailureReport(
+                        item_id=id,
+                        kind=FailureKind.LIMIT_EXCEEDED,
+                        value=f"{original_name}: {e}",
+                    )
+                )
+                continue
             except Exception:
                 fails.append(
                     FailureReport(
@@ -200,14 +237,53 @@ class DocumentProcessor:
 
         return res, messages, fails
 
+    # Duration is read from the stored file, so this runs after the file storage stage
+    def _check_duration(self, descriptors: list[FileDescriptor]) -> list[FailureReport]:
+        failed: list[FailureReport] = []
+        if self.media_probe is None:
+            return failed
+
+        for d in descriptors:
+            limit = self.limits.max_seconds(d.content_type)
+            if limit is None:
+                continue
+            try:
+                seconds = self.media_probe.duration(
+                    self.file_storage.get_full_path(d.id), d.content_type
+                )
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                failed.append(
+                    FailureReport(
+                        item_id=d.id,
+                        kind=FailureKind.EMBEDDING_MODEL,
+                        value=f"can not read media ({e}): {d.original_name}",
+                    )
+                )
+                continue
+
+            if seconds is not None and seconds > limit:
+                failed.append(
+                    FailureReport(
+                        item_id=d.id,
+                        kind=FailureKind.LIMIT_EXCEEDED,
+                        value=f"{d.original_name}: lasts {seconds:.0f} s, the limit is {limit} s",
+                    )
+                )
+        return failed
+
     def _save_to_vector_storage(
         self, descriptors: list[FileDescriptor], msgs: list[SaveMessage]
     ) -> list[FailureReport]:
-        failed: list[FailureReport] = []
+        failed = self._check_duration(descriptors)
+        rejected = {x.item_id for x in failed}
         pairs: list[tuple[FileDescriptor, SaveMessage]] = []
 
         # One report for a file even when both embeddings are wrong, so rollback gets its id once
         for d, msg in zip(descriptors, msgs):
+            if d.id in rejected:
+                continue
             wrong = [
                 field
                 for (field, value) in (
@@ -286,11 +362,14 @@ class DocumentProcessor:
 
         return failed
 
-    def save(self, msgs: Iterator[SaveMessage]) -> list[FailureReport]:
-        descriptors, message_list, fails = self._save_to_file_storage(msgs)
+    # Writes the files to disk and nothing else, indexing is a separate step so it can wait in a queue
+    def accept(
+        self, msgs: Iterator[SaveMessage], reserve: Callable[[], bool] | None = None
+    ) -> tuple[list[FileDescriptor], list[SaveMessage], list[FailureReport]]:
+        return self._save_to_file_storage(msgs, reserve)
 
-        fails += self._save_to_vector_storage(descriptors, message_list)
-
+    # Removes files of the failed reports from the disk and from the vector storage
+    def rollback(self, fails: list[FailureReport]) -> None:
         # Vector storage refuses repeated ids
         ids = list(dict.fromkeys(x.item_id for x in fails))
         for id in ids:
@@ -299,6 +378,20 @@ class DocumentProcessor:
         if len(ids) != 0:
             self.storage.remove(ids)
 
+    # Embeds and indexes files that accept stored, a file that fails is removed
+    def index(
+        self, descriptors: list[FileDescriptor], msgs: list[SaveMessage]
+    ) -> list[FailureReport]:
+        fails = self._save_to_vector_storage(descriptors, msgs)
+        self.rollback(fails)
+        return fails
+
+    def save(self, msgs: Iterator[SaveMessage]) -> list[FailureReport]:
+        descriptors, message_list, fails = self.accept(msgs)
+
+        fails += self._save_to_vector_storage(descriptors, message_list)
+        self.rollback(fails)
+
         return fails
 
 
@@ -306,6 +399,7 @@ class FailureKind(Enum):
     FILE_STORAGE = "File storage"
     EMBEDDING_MODEL = "Embedding model"
     VECTOR_STORAGE = "Vector storage"
+    LIMIT_EXCEEDED = "Limit exceeded"
 
 
 class FailureReport(BaseModel):
@@ -324,3 +418,5 @@ class SaveMessage(BaseModel):
     embeddings: Embeddings | None = None
     text_description: str | None = None
     text_embeddings: Embeddings | None = None
+    # Uploader, None for the admin
+    owner_id: uuid.UUID | None = None

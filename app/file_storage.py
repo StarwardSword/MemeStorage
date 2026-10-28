@@ -2,7 +2,7 @@ import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from .file_storage_models import FileDescriptor, StoredFile
+from .file_storage_models import FileDescriptor, FileRecord, OwnerUsage, StoredFile
 
 
 class FileStorage(ABC):
@@ -34,6 +34,18 @@ class FileStorage(ABC):
         """
         Returns a list of file descriptors ordered by input ids
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def usage(self) -> list[OwnerUsage]:
+        """Stored files grouped by owner and kind"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_files(
+        self, owner_id: uuid.UUID | None, limit: int, offset: int
+    ) -> list[FileRecord]:
+        """Newest first. Files of every owner when owner_id is None"""
         raise NotImplementedError
 
     @abstractmethod

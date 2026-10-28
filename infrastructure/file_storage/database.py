@@ -1,9 +1,13 @@
 import os
 import sqlite3
+import time
 import uuid
 from contextlib import closing
 
-from app import FileDescriptor
+from app import FileDescriptor, FileRecord, OwnerUsage
+
+# Added after the first release, databases made before it get them on start
+LATER_COLUMNS = {"owner_id": "TEXT", "size": "INTEGER", "created_at": "REAL"}
 
 
 class SqliteDatabase:
@@ -33,16 +37,38 @@ class SqliteDatabase:
                     id TEXT PRIMARY KEY NOT NULL
                         CHECK (length(id) = 36),
                     content_type TEXT NOT NULL,
-                    original_name TEXT NOT NULL
+                    original_name TEXT NOT NULL,
+                    owner_id TEXT,
+                    size INTEGER,
+                    created_at REAL
                 )
                 """
             )
 
-    def save(self, data: FileDescriptor) -> uuid.UUID:
+            have = {r["name"] for r in conn.execute("PRAGMA table_info(file_data)")}
+            for name, kind in LATER_COLUMNS.items():
+                if name not in have:
+                    conn.execute(f"ALTER TABLE file_data ADD COLUMN {name} {kind}")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS file_data_by_owner ON file_data(owner_id)"
+            )
+            conn.commit()
+
+    def save(
+        self, data: FileDescriptor, owner_id: uuid.UUID | None, size: int
+    ) -> uuid.UUID:
         with closing(self._conn()) as conn:
             conn.execute(
-                """INSERT INTO file_data(id, content_type, original_name) VALUES (?, ?, ?)""",
-                (str(data.id), data.content_type, data.original_name),
+                """INSERT INTO file_data(id, content_type, original_name, owner_id, size, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    str(data.id),
+                    data.content_type,
+                    data.original_name,
+                    str(owner_id) if owner_id else None,
+                    size,
+                    time.time(),
+                ),
             )
             conn.commit()
             return data.id
@@ -90,4 +116,54 @@ class SqliteDatabase:
                 content_type=items[id]["content_type"],
             )
             for id in ids
+        ]
+
+    def usage(self) -> list[OwnerUsage]:
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                """
+                SELECT owner_id,
+                       substr(content_type, 1, instr(content_type || '/', '/') - 1) AS kind,
+                       COUNT(*) AS files,
+                       COALESCE(SUM(size), 0) AS bytes,
+                       MAX(created_at) AS last_upload
+                FROM file_data GROUP BY owner_id, kind
+                """
+            ).fetchall()
+
+        return [
+            OwnerUsage(
+                owner_id=uuid.UUID(r["owner_id"]) if r["owner_id"] else None,
+                kind=r["kind"],
+                files=r["files"],
+                bytes=r["bytes"],
+                last_upload=r["last_upload"],
+            )
+            for r in rows
+        ]
+
+    # File ids are uuid7, so sorting by id is sorting by time of arrival
+    def list_files(
+        self, owner_id: uuid.UUID | None, limit: int, offset: int
+    ) -> list[FileRecord]:
+        where, args = ("WHERE owner_id = ?", [str(owner_id)]) if owner_id else ("", [])
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, original_name, content_type, owner_id, size, created_at
+                FROM file_data {where} ORDER BY id DESC LIMIT ? OFFSET ?
+                """,
+                (*args, limit, offset),
+            ).fetchall()
+
+        return [
+            FileRecord(
+                id=uuid.UUID(r["id"]),
+                original_name=r["original_name"],
+                content_type=r["content_type"],
+                owner_id=uuid.UUID(r["owner_id"]) if r["owner_id"] else None,
+                size=r["size"],
+                created_at=r["created_at"],
+            )
+            for r in rows
         ]
