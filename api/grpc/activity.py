@@ -1,3 +1,4 @@
+import ipaddress
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -27,6 +28,35 @@ def peer_ip(peer: str) -> str | None:
     if kind == "ipv6":
         return rest.rsplit(":", 1)[0].strip("[]")
     return None
+
+
+def is_loopback(ip: str | None) -> bool:
+    try:
+        address = ipaddress.ip_address(ip or "")
+    except ValueError:
+        return False
+    # A client of the IPv4 socket on a dual-stack listener shows as ::ffff:127.0.0.1
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address.is_loopback
+
+
+def client_ip(context: grpc.ServicerContext) -> str | None:
+    """Address of the client. The server sits behind nginx on the same machine, which sends the address
+    of its client in X-Forwarded-For. It is believed only when the call comes from loopback: from anyone
+    else the header is whatever they wrote. A value that is not an address is not written to the log"""
+    peer = peer_ip(context.peer())
+    if not is_loopback(peer):
+        return peer
+
+    forwarded = dict(context.invocation_metadata() or ()).get("x-forwarded-for")
+    if not isinstance(forwarded, str):
+        return peer
+    first = forwarded.split(",")[0].strip()
+    try:
+        return str(ipaddress.ip_address(first))
+    except ValueError:
+        return peer
 
 
 class ActivityInterceptor(grpc.ServerInterceptor):
@@ -86,7 +116,7 @@ class ActivityInterceptor(grpc.ServerInterceptor):
                     duration_ms=(time.perf_counter() - started) * 1000,
                     bytes_in=received,
                     bytes_out=sent,
-                    ip=peer_ip(context.peer()),
+                    ip=client_ip(context),
                     detail=getattr(CURRENT, "detail", None),
                 )
             )
