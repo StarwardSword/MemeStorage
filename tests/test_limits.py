@@ -4,7 +4,7 @@ from app import FailureKind, Limits, MediaProbe
 from app.document_processor import DocumentProcessor
 from app.limits import LimitExceededError, limited
 
-from .fakes import FakeFiles, NoStorage, message
+from .fakes import FakeFiles, NoStorage, NoThumbnails, message
 
 
 class FakeProbe(MediaProbe):
@@ -17,7 +17,12 @@ class FakeProbe(MediaProbe):
 
 def processor(limits, probe=None):
     files = FakeFiles()
-    return DocumentProcessor(files, None, NoStorage(), "safe", limits, probe), files
+    return (
+        DocumentProcessor(
+            files, None, NoStorage(), NoThumbnails(), "safe", limits, probe
+        ),
+        files,
+    )
 
 
 class LimitsTest(unittest.TestCase):
@@ -74,6 +79,30 @@ class AcceptTest(unittest.TestCase):
         self.assertEqual([f.kind for f in fails], [FailureKind.LIMIT_EXCEEDED])
         self.assertIn("60 s", fails[0].value)
         self.assertEqual(files.stored, {})
+
+    def test_a_file_without_a_thumbnail_is_removed_at_once(self):
+        # An async upload stops after this stage, nobody else would clean the file up
+        class Broken(NoThumbnails):
+            def generate(self, source, content_type):
+                raise ValueError("can not decode")
+
+        p, files = processor(Limits())
+        p.thumbnail_generator = Broken()
+        descriptors, _, fails = p.accept(iter([message("a.png", 5)]))
+        self.assertEqual(descriptors, [])
+        self.assertEqual([f.kind for f in fails], [FailureKind.THUMBNAIL])
+        self.assertEqual(files.stored, {})
+
+    def test_a_thumbnail_is_stored_with_the_file(self):
+        class Small(NoThumbnails):
+            def generate(self, source, content_type):
+                return b"jpeg"
+
+        p, files = processor(Limits())
+        p.thumbnail_generator = Small()
+        descriptors, _, fails = p.accept(iter([message("a.png", 5)]))
+        self.assertEqual(fails, [])
+        self.assertEqual(files.thumbnails, {descriptors[0].id: b"jpeg"})
 
     def test_unreadable_media_is_reported(self):
         class Broken(MediaProbe):

@@ -4,6 +4,7 @@ sentence-transformers[image,video]==6.1.0
 transformers==5.19.0
 chromadb==1.5.9
 numpy==2.5.2
+pillow==12.3.0
 librosa==1.0.0
 onnxruntime==1.31.1
 grpcio==1.84.0

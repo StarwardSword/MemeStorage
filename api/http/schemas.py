@@ -88,6 +88,7 @@ class EmbeddingSearchRequest(BaseModel):
 SaveFailureKind = Literal[
     "unsupported_type",
     "file_storage",
+    "thumbnail",
     "embedding_model",
     "vector_storage",
     "limit_exceeded",
@@ -98,7 +99,8 @@ JobStatus = Literal["pending", "running", "done", "failed"]
 class SaveFailure(BaseModel):
     kind: SaveFailureKind = Field(
         description="Stage that failed. `unsupported_type`: the file is not an image, video or audio "
-        "and was not passed to the application; `embedding_model` includes a wrong embedding dimension; "
+        "and was not passed to the application; `thumbnail`: the file could not be decoded to build its thumbnail; "
+        "`embedding_model` includes a wrong embedding dimension; "
         "`limit_exceeded`: the file is too big or too long, or the batch or the queue is full"
     )
     message: str = Field(

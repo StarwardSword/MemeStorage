@@ -7,6 +7,8 @@ from .jobs import SqliteJobStore
 from .media_probe import LocalMediaProbe
 from .storage import ChromaStorage
 from .storage import Configuration as ChromaConfiguration
+from .thumbnails import Configuration as ThumbnailsConfiguration
+from .thumbnails import PillowThumbnailGenerator
 from .users import SqliteUserStore
 
 __all__ = [
@@ -21,4 +23,6 @@ __all__ = [
     "FileStorageConfiguration",
     "ChromaStorage",
     "ChromaConfiguration",
+    "PillowThumbnailGenerator",
+    "ThumbnailsConfiguration",
 ]

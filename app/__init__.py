@@ -38,6 +38,7 @@ from .limits import LimitExceededError, Limits
 from .media import MediaProbe
 from .stats import Stats, TypeUsage, UserStats
 from .storage import Record, RecordNotFoundError, Storage
+from .thumbnails import THUMBNAIL_CONTENT_TYPE, ThumbnailGenerator
 
 __all__ = [
     "ApplicationConfiguration",
@@ -88,4 +89,6 @@ __all__ = [
     "SaveMessage",
     "FailureKind",
     "FailureReport",
+    "ThumbnailGenerator",
+    "THUMBNAIL_CONTENT_TYPE",
 ]

@@ -14,7 +14,7 @@ service MemeStorage {
     //   embeddings or text_embeddings dimension does not match the model
     // Ready embeddings (embeddings, text_embeddings) are accepted only from users with allow_embeddings.
     // PERMISSION_DENIED: ready embeddings from a user who may not send them
-    // INTERNAL: file storage, embedding model or vector storage failed, nothing is stored
+    // INTERNAL: file storage, thumbnail, embedding model or vector storage failed, nothing is stored
     // RESOURCE_EXHAUSTED: the file is larger or longer than the server limit, nothing is stored
     rpc Save(stream SaveRequest) returns (SaveResponse);
 
@@ -42,6 +42,10 @@ service MemeStorage {
     // INVALID_ARGUMENT: uuid is malformed
     // NOT_FOUND: there is no file with this uuid
     rpc GetFile(UUIDRequest) returns (stream DownloadResponse);
+
+    // INVALID_ARGUMENT: uuid is malformed
+    // NOT_FOUND: there is no file with this uuid
+    rpc GetThumbnail(UUIDRequest) returns (ThumbnailResponse);
 
     // INVALID_ARGUMENT: no embeddings, embeddings dimension does not match the model,
     //   record_count is less than 1 or greater than max_records from the server config
@@ -128,10 +132,12 @@ message SaveFailure {
         // Includes a wrong embeddings dimension
         EMBEDDING_MODEL = 3;
         VECTOR_STORAGE = 4;
+        // The file could not be decoded to build its thumbnail
+        THUMBNAIL = 5;
         // The file is larger or longer than the server limit, or the batch or the queue is full
-        LIMIT_EXCEEDED = 5;
-        // The file came with ready embeddings, but the call has no valid x-embeddings-key metadata
-        FORBIDDEN = 6;
+        LIMIT_EXCEEDED = 6;
+        // The file came with ready embeddings from a user who may not send them
+        FORBIDDEN = 7;
     }
 
     Kind kind = 1;
@@ -195,6 +201,13 @@ message DownloadResponse {
         DownloadFileInfo info = 1;
         bytes chunk = 2;
     }
+}
+
+
+// GetThumbnail
+message ThumbnailResponse {
+    string content_type = 1;
+    bytes data = 2;
 }
 
 

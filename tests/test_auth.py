@@ -30,6 +30,7 @@ def local_files(directory):
     return LocalFileStorage(
         FilesConfiguration(
             root=str(Path(directory, "files")),
+            thumbnails_root=str(Path(directory, "thumbnails")),
             sqlite_connection_string=str(Path(directory, "app.db")),
         )
     )

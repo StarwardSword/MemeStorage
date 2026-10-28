@@ -18,6 +18,7 @@ from infrastructure import (
     ChromaConfiguration,
     FileStorageConfiguration,
     GemmaConfiguration,
+    ThumbnailsConfiguration,
 )
 
 
@@ -36,6 +37,7 @@ class Configuration(BaseSettings):
     auth: AuthConfiguration
     activity: ActivityConfiguration = ActivityConfiguration()
     limits: Limits = Limits()
+    thumbnails: ThumbnailsConfiguration = ThumbnailsConfiguration()
     grpc: GRPCConfiguration | None = None
     http: HTTPConfiguration | None = None
 

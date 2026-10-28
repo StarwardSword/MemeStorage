@@ -16,6 +16,7 @@ from .file_storage_models import FileDescriptor, StoredFile
 from .limits import LimitExceededError, Limits, limited
 from .media import MediaProbe
 from .storage import Record, Storage
+from .thumbnails import ThumbnailGenerator
 
 
 class DocumentProcessor:
@@ -24,6 +25,7 @@ class DocumentProcessor:
         file_storage: FileStorage,
         embedding_provider: EmbeddingProvider,
         storage: Storage,
+        thumbnail_generator: ThumbnailGenerator,
         save_strategy: str,
         limits: Limits | None = None,
         media_probe: MediaProbe | None = None,
@@ -33,6 +35,7 @@ class DocumentProcessor:
         self.storage = storage
         self.limits = limits or Limits()
         self.media_probe = media_probe
+        self.thumbnail_generator = thumbnail_generator
 
         if save_strategy == "safe":
             self._embeddings = self._safe_batch_embedding
@@ -152,6 +155,14 @@ class DocumentProcessor:
             for (id, name) in failed
         ]
 
+    # Generator reads the file already written to the storage
+    def _save_thumbnail(self, d: FileDescriptor) -> None:
+        thumbnail = self.thumbnail_generator.generate(
+            self.file_storage.get_full_path(d.id), d.content_type
+        )
+        if thumbnail is not None:
+            self.file_storage.save_thumbnail(d.id, thumbnail)
+
     # reserve is asked for a place before each file is read and says no when there is none,
     # such a file and the ones after it are refused
     def _save_to_file_storage(
@@ -227,12 +238,28 @@ class DocumentProcessor:
                 )
                 continue
 
-            # Messages go along with descriptors, so a failed file must not shift them
-            res.append(
-                FileDescriptor(
-                    id=id, original_name=original_name, content_type=msg.content_type
-                )
+            descriptor = FileDescriptor(
+                id=id, original_name=original_name, content_type=msg.content_type
             )
+
+            try:
+                self._save_thumbnail(descriptor)
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                # Removed here and not by the caller: an async upload stops after this stage
+                self.file_storage.remove(id)
+                fails.append(
+                    FailureReport(
+                        item_id=id,
+                        kind=FailureKind.THUMBNAIL,
+                        value=f"error on thumbnail: {original_name}",
+                    )
+                )
+                continue
+
+            # Messages go along with descriptors, so a failed file must not shift them
+            res.append(descriptor)
             messages.append(msg)
 
         return res, messages, fails
@@ -397,6 +424,7 @@ class DocumentProcessor:
 
 class FailureKind(Enum):
     FILE_STORAGE = "File storage"
+    THUMBNAIL = "Thumbnail"
     EMBEDDING_MODEL = "Embedding model"
     VECTOR_STORAGE = "Vector storage"
     LIMIT_EXCEEDED = "Limit exceeded"

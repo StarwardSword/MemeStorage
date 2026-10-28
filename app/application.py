@@ -36,6 +36,7 @@ from .limits import Limits
 from .media import MediaProbe
 from .stats import Stats, TypeUsage, UserStats
 from .storage import Storage
+from .thumbnails import ThumbnailGenerator
 
 
 class Application:
@@ -44,6 +45,7 @@ class Application:
         embedding_provider: EmbeddingProvider,
         storage: Storage,
         file_storage: FileStorage,
+        thumbnail_generator: ThumbnailGenerator,
         configuration: Configuration,
         jobs: JobStore,
         users: UserStore,
@@ -62,10 +64,12 @@ class Application:
         # Places taken by uploads that are still being read, they are not in the job store yet
         self._reserved = 0
         self._queue_lock = Lock()
+        self.thumbnail_generator: ThumbnailGenerator = thumbnail_generator
         self.document_processor = DocumentProcessor(
             file_storage,
             embedding_provider,
             storage,
+            thumbnail_generator,
             configuration.save_strategy,
             self.limits,
             media_probe,
@@ -93,6 +97,15 @@ class Application:
 
     def get_file(self, id: uuid.UUID) -> StoredFile:
         return self.file_storage.get(id)
+
+    # JPEG bytes, see THUMBNAIL_CONTENT_TYPE. Audio never has its own thumbnail and files
+    # stored before thumbnails appeared may lack one, both get a placeholder of their type
+    def get_thumbnail(self, id: uuid.UUID) -> bytes:
+        descriptor = self.file_storage.descriptor(id)
+        try:
+            return self.file_storage.get_thumbnail(id)
+        except FileNotFoundError:
+            return self.thumbnail_generator.placeholder(descriptor.content_type)
 
     def get_by_embeddings(
         self, embeddings: list[Embeddings], n_records: int

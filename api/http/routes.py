@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app import (
+    THUMBNAIL_CONTENT_TYPE,
     Application,
     EmbeddingsForbiddenError,
     FailureKind,
@@ -73,6 +74,7 @@ NOT_FOUND: dict[int | str, dict[str, Any]] = {
 
 FAILURE_KINDS: dict[FailureKind, SaveFailureKind] = {
     FailureKind.FILE_STORAGE: "file_storage",
+    FailureKind.THUMBNAIL: "thumbnail",
     FailureKind.EMBEDDING_MODEL: "embedding_model",
     FailureKind.VECTOR_STORAGE: "vector_storage",
     FailureKind.LIMIT_EXCEEDED: "limit_exceeded",
@@ -300,6 +302,7 @@ files = APIRouter(
     summary="Upload a file",
     description="Stores an image, video or audio file and indexes it for search. "
     "Content type is taken from the file part, or guessed by file name when it is missing or `application/octet-stream`. "
+    "A thumbnail is built right after the file is stored, a file it can not be built for is not stored. "
     "`embeddings` and `text_embeddings` must have the dimension of the server model, otherwise the response is `422`. "
     "Id of the saved file is not returned, the file is found by search.",
     response_description="File stored",
@@ -316,7 +319,7 @@ files = APIRouter(
         **TOO_LARGE,
         status.HTTP_500_INTERNAL_SERVER_ERROR: {
             "model": Error,
-            "description": "File storage, embedding model or vector storage failed, nothing is stored",
+            "description": "File storage, thumbnail, embedding model or vector storage failed, nothing is stored",
         },
     },
 )
@@ -462,6 +465,29 @@ def get_file_info(file_id: uuid.UUID, application: ApplicationDep) -> FileInfo:
         raise file_not_found(file_id) from None
 
 
+@files.get(
+    "/{file_id}/thumbnail",
+    response_class=Response,
+    summary="Get file thumbnail",
+    description="JPEG thumbnail of the file, the longest side is `thumbnails.size` from the server config. "
+    "Audio and files stored before thumbnails appeared get a placeholder of their type.",
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Thumbnail",
+            "content": {THUMBNAIL_CONTENT_TYPE: {}},
+        },
+        **NOT_FOUND,
+    },
+)
+def get_thumbnail(file_id: uuid.UUID, application: ApplicationDep) -> Response:
+    try:
+        thumbnail = application.get_thumbnail(file_id)
+    except FileNotFoundError:
+        raise file_not_found(file_id) from None
+
+    return Response(thumbnail, media_type=THUMBNAIL_CONTENT_TYPE)
+
+
 # --- jobs
 
 jobs = APIRouter(
@@ -485,7 +511,7 @@ QUEUE_FULL: dict[int | str, dict[str, Any]] = {
     summary="Upload a file and index it later",
     description="Stores the file and answers at once, embedding runs in the background. "
     "Poll `GET /jobs/{id}`: the file is searchable when the status is `done`. "
-    "Precomputed embeddings need the key, as in `POST /files`. "
+    "Precomputed embeddings need the right to send them, as in `POST /files`. "
     "Jobs that were queued survive a server restart.",
     responses={
         status.HTTP_400_BAD_REQUEST: {

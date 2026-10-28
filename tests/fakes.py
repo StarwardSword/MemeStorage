@@ -8,6 +8,7 @@ from app import (
     ApplicationConfiguration,
     AuthConfiguration,
     Limits,
+    ThumbnailGenerator,
 )
 from app.document_processor import SaveMessage
 from infrastructure.activity import SqliteActivityStore
@@ -17,9 +18,18 @@ from infrastructure.users import SqliteUserStore
 ADMIN_TOKEN = "admin-token-for-the-tests-0123456789"
 
 
+class NoThumbnails(ThumbnailGenerator):
+    def generate(self, source, content_type):
+        return None
+
+    def placeholder(self, content_type):
+        return b""
+
+
 class FakeFiles:
     def __init__(self, delay=0.0):
         self.stored = {}
+        self.thumbnails = {}
         self.delay = delay
 
     def save(self, file):
@@ -31,6 +41,10 @@ class FakeFiles:
 
     def remove(self, id):
         self.stored.pop(id, None)
+        self.thumbnails.pop(id, None)
+
+    def save_thumbnail(self, id, data):
+        self.thumbnails[id] = data
 
     def get_full_path(self, id):
         return Path(str(id))
@@ -63,6 +77,7 @@ def make_app(directory, files=None, activity=False, **limits) -> Application:
         embedding_provider=None,
         storage=NoStorage(),
         file_storage=files or FakeFiles(delay=0.05),
+        thumbnail_generator=NoThumbnails(),
         configuration=ApplicationConfiguration(save_strategy="safe"),
         jobs=SqliteJobStore(db),
         users=SqliteUserStore(db),
