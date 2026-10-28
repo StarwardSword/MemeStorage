@@ -11,24 +11,19 @@ from torchcodec.decoders import (
     get_container_metadata,
 )
 
-from app import ThumbnailGenerator
+from app import (
+    ANIMATED_THUMBNAIL_CONTENT_TYPE,
+    THUMBNAIL_CONTENT_TYPE,
+    Thumbnail,
+    ThumbnailGenerator,
+)
+from app.media import is_gif
 
+from ..animation import sample_animation, to_rgb
 from .config import Configuration
-
-BACKGROUND = (255, 255, 255)
 
 # Drawn once with Pillow, the size does not follow the config
 PLACEHOLDERS = Path(__file__).with_name("placeholders")
-
-
-# JPEG has no alpha, so transparent parts are laid on white instead of turning black
-def to_rgb(image: Image.Image) -> Image.Image:
-    if image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info:
-        image = image.convert("RGBA")
-        background = Image.new("RGB", image.size, BACKGROUND)
-        background.paste(image, mask=image.getchannel("A"))
-        return background
-    return image.convert("RGB")
 
 
 # VideoDecoder can not be created without a duration, and some streams can not seek at all,
@@ -74,6 +69,7 @@ class PillowThumbnailGenerator(ThumbnailGenerator):
     def __init__(self, config: Configuration) -> None:
         self.size = config.size
         self.quality = config.quality
+        self.gif_frames = config.gif_frames
         self.placeholders = {
             kind: Path(PLACEHOLDERS, f"{kind}.jpg").read_bytes()
             for kind in ("image", "video", "audio")
@@ -92,16 +88,50 @@ class PillowThumbnailGenerator(ThumbnailGenerator):
         with Image.open(source) as image:
             return self._encode(ImageOps.exif_transpose(image))
 
+    # Some of the frames, spread evenly, shown for as long as the whole GIF lasts.
+    # None for a GIF of one frame, it is a picture like any other
+    def _animated(self, source: Path) -> bytes | None:
+        animation = sample_animation(source, self.gif_frames, self.size)
+        if animation is None:
+            return None
+
+        buffer = BytesIO()
+        first, *rest = animation.frames
+        first.save(
+            buffer,
+            "WEBP",
+            save_all=True,
+            append_images=rest,
+            duration=max(20, animation.duration_ms // len(animation.frames)),
+            loop=0,
+            quality=self.quality,
+        )
+        return buffer.getvalue()
+
     @override
-    def generate(self, source: Path, content_type: str) -> bytes | None:
+    def generate(self, source: Path, content_type: str) -> Thumbnail | None:
+        if is_gif(content_type):
+            animated = self._animated(source)
+            if animated is not None:
+                return Thumbnail(
+                    data=animated, content_type=ANIMATED_THUMBNAIL_CONTENT_TYPE
+                )
         if content_type.startswith("image/"):
-            return self._image(source)
+            return Thumbnail(
+                data=self._image(source), content_type=THUMBNAIL_CONTENT_TYPE
+            )
         if content_type.startswith("video/"):
-            return self._encode(video_frame(source))
+            return Thumbnail(
+                data=self._encode(video_frame(source)),
+                content_type=THUMBNAIL_CONTENT_TYPE,
+            )
         return None
 
     # Only media files are stored, anything unexpected gets the image placeholder
     @override
-    def placeholder(self, content_type: str) -> bytes:
+    def placeholder(self, content_type: str) -> Thumbnail:
         kind = content_type.split("/", 1)[0]
-        return self.placeholders.get(kind, self.placeholders["image"])
+        return Thumbnail(
+            data=self.placeholders.get(kind, self.placeholders["image"]),
+            content_type=THUMBNAIL_CONTENT_TYPE,
+        )

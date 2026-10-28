@@ -91,7 +91,7 @@ class OnnxModel:
         ]
         return np.concatenate(parts)
 
-    def _media(self, item: dict[str, str]) -> np.ndarray:
+    def _media(self, item: dict[str, Any]) -> np.ndarray:
         # Media goes in without a prompt: the model card says prefixes are for text only
         if Key.IMAGE in item:
             with Image.open(item[Key.IMAGE]) as img:
@@ -118,7 +118,7 @@ class OnnxModel:
         return self._text_model(enc, audio_features=features)
 
     def encode(
-        self, inputs: list[dict[str, str]], prompt_name: str | None, batch_size: int
+        self, inputs: list[dict[str, Any]], prompt_name: str | None, batch_size: int
     ) -> np.ndarray:
         rows: list[np.ndarray | None] = [None] * len(inputs)
 

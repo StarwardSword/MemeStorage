@@ -1,4 +1,6 @@
+import logging
 import uuid
+from collections.abc import Callable
 from enum import Enum
 from mimetypes import guess_type
 from pathlib import Path
@@ -12,8 +14,12 @@ from .embeddings import (
 )
 from .file_storage import FileStorage
 from .file_storage_models import FileDescriptor, StoredFile
+from .limits import LimitExceededError, Limits, limited
+from .media import MediaProbe
 from .storage import Record, Storage
 from .thumbnails import ThumbnailGenerator
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -24,10 +30,14 @@ class DocumentProcessor:
         storage: Storage,
         thumbnail_generator: ThumbnailGenerator,
         save_strategy: str,
+        limits: Limits | None = None,
+        media_probe: MediaProbe | None = None,
     ) -> None:
         self.file_storage = file_storage
         self.embedding_provider = embedding_provider
         self.storage = storage
+        self.limits = limits or Limits()
+        self.media_probe = media_probe
         self.thumbnail_generator = thumbnail_generator
 
         if save_strategy == "safe":
@@ -156,16 +166,36 @@ class DocumentProcessor:
         if thumbnail is not None:
             self.file_storage.save_thumbnail(d.id, thumbnail)
 
+    # reserve is asked for a place before each file is read and says no when there is none,
+    # such a file and the ones after it are refused
     def _save_to_file_storage(
-        self, msgs: Iterator[SaveMessage]
+        self, msgs: Iterator[SaveMessage], reserve: Callable[[], bool] | None = None
     ) -> tuple[list[FileDescriptor], list[SaveMessage], list[FailureReport]]:
         res: list[FileDescriptor] = []
         fails: list[FailureReport] = []
         messages: list[SaveMessage] = []
 
-        for msg in msgs:
+        for number, msg in enumerate(msgs, start=1):
             id = uuid.uuid7()
             original_name = Path(msg.original_name).name
+
+            refusal = None
+            if (
+                self.limits.max_batch_files is not None
+                and number > self.limits.max_batch_files
+            ):
+                refusal = f"batch is limited to {self.limits.max_batch_files} files"
+            elif reserve is not None and not reserve():
+                refusal = "queue is full"
+            if refusal is not None:
+                fails.append(
+                    FailureReport(
+                        item_id=id,
+                        kind=FailureKind.LIMIT_EXCEEDED,
+                        value=f"{original_name}: {refusal}",
+                    )
+                )
+                continue
 
             if msg.content_type is None:
                 msg.content_type = guess_type(original_name)[0]
@@ -184,13 +214,23 @@ class DocumentProcessor:
                 self.file_storage.save(
                     StoredFile(
                         id=id,
-                        data=msg.data,
+                        data=limited(msg.data, self.limits.max_bytes(msg.content_type)),
                         content_type=msg.content_type,
                         original_name=original_name,
+                        owner_id=msg.owner_id,
                     )
                 )
             except KeyboardInterrupt:
                 raise
+            except LimitExceededError as e:
+                fails.append(
+                    FailureReport(
+                        item_id=id,
+                        kind=FailureKind.LIMIT_EXCEEDED,
+                        value=f"{original_name}: {e}",
+                    )
+                )
+                continue
             except Exception:
                 fails.append(
                     FailureReport(
@@ -205,11 +245,21 @@ class DocumentProcessor:
                 id=id, original_name=original_name, content_type=msg.content_type
             )
 
+            refused = self._check_media(descriptor)
+            if refused is not None:
+                self.file_storage.remove(id)
+                fails.append(refused)
+                continue
+
             try:
                 self._save_thumbnail(descriptor)
             except KeyboardInterrupt:
                 raise
             except Exception:
+                # The client gets only the file name, what went wrong stays in the log
+                logger.warning("thumbnail of %s failed", original_name, exc_info=True)
+                # Removed here and not by the caller: an async upload stops after this stage
+                self.file_storage.remove(id)
                 fails.append(
                     FailureReport(
                         item_id=id,
@@ -224,6 +274,51 @@ class DocumentProcessor:
             messages.append(msg)
 
         return res, messages, fails
+
+    # Length and frames are read from the stored file. This runs first, before the thumbnail
+    # is built: a GIF of thousands of frames must be refused before it is decoded
+    def _check_media(self, d: FileDescriptor) -> FailureReport | None:
+        seconds_limit = self.limits.max_seconds(d.content_type)
+        frames_limit = self.limits.max_frames(d.content_type)
+        if self.media_probe is None or (seconds_limit is None and frames_limit is None):
+            return None
+
+        path = self.file_storage.get_full_path(d.id)
+        try:
+            frames = (
+                self.media_probe.frames(path, d.content_type)
+                if frames_limit is not None
+                else None
+            )
+            seconds = (
+                self.media_probe.duration(path, d.content_type)
+                if seconds_limit is not None
+                else None
+            )
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            return FailureReport(
+                item_id=d.id,
+                kind=FailureKind.UNREADABLE,
+                value=f"{d.original_name}: can not read the file ({e})",
+            )
+
+        if frames_limit is not None and frames is not None and frames > frames_limit:
+            reason = f"has {frames} frames, the limit is {frames_limit}"
+        elif (
+            seconds_limit is not None
+            and seconds is not None
+            and seconds > seconds_limit
+        ):
+            reason = f"lasts {seconds:.0f} s, the limit is {seconds_limit} s"
+        else:
+            return None
+        return FailureReport(
+            item_id=d.id,
+            kind=FailureKind.LIMIT_EXCEEDED,
+            value=f"{d.original_name}: {reason}",
+        )
 
     def _save_to_vector_storage(
         self, descriptors: list[FileDescriptor], msgs: list[SaveMessage]
@@ -311,11 +406,14 @@ class DocumentProcessor:
 
         return failed
 
-    def save(self, msgs: Iterator[SaveMessage]) -> list[FailureReport]:
-        descriptors, message_list, fails = self._save_to_file_storage(msgs)
+    # Writes the files to disk and nothing else, indexing is a separate step so it can wait in a queue
+    def accept(
+        self, msgs: Iterator[SaveMessage], reserve: Callable[[], bool] | None = None
+    ) -> tuple[list[FileDescriptor], list[SaveMessage], list[FailureReport]]:
+        return self._save_to_file_storage(msgs, reserve)
 
-        fails += self._save_to_vector_storage(descriptors, message_list)
-
+    # Removes files of the failed reports from the disk and from the vector storage
+    def rollback(self, fails: list[FailureReport]) -> None:
         # Vector storage refuses repeated ids
         ids = list(dict.fromkeys(x.item_id for x in fails))
         for id in ids:
@@ -324,14 +422,30 @@ class DocumentProcessor:
         if len(ids) != 0:
             self.storage.remove(ids)
 
+    # Embeds and indexes files that accept stored, a file that fails is removed
+    def index(
+        self, descriptors: list[FileDescriptor], msgs: list[SaveMessage]
+    ) -> list[FailureReport]:
+        fails = self._save_to_vector_storage(descriptors, msgs)
+        self.rollback(fails)
+        return fails
+
+    def save(self, msgs: Iterator[SaveMessage]) -> list[FailureReport]:
+        descriptors, message_list, fails = self.accept(msgs)
+
+        fails += self._save_to_vector_storage(descriptors, message_list)
+        self.rollback(fails)
+
         return fails
 
 
 class FailureKind(Enum):
     FILE_STORAGE = "File storage"
     THUMBNAIL = "Thumbnail"
+    UNREADABLE = "Unreadable file"
     EMBEDDING_MODEL = "Embedding model"
     VECTOR_STORAGE = "Vector storage"
+    LIMIT_EXCEEDED = "Limit exceeded"
 
 
 class FailureReport(BaseModel):
@@ -350,3 +464,5 @@ class SaveMessage(BaseModel):
     embeddings: Embeddings | None = None
     text_description: str | None = None
     text_embeddings: Embeddings | None = None
+    # Uploader, None for the admin
+    owner_id: uuid.UUID | None = None

@@ -7,8 +7,10 @@ from fastapi import FastAPI
 
 from app import Application
 
+from .activity import ActivityMiddleware
+from .admin import admin
 from .config import Configuration
-from .routes import files, search, service
+from .routes import files, jobs, search, service
 
 DESCRIPTION = "Meme storage (images, video, audio) with search by text query."
 
@@ -32,8 +34,11 @@ def create_app(app: Application, config: Configuration) -> FastAPI:
     # api.add_middleware(CORSMiddleware, allow_origins=["*"])
 
     api.state.application = app
+    # The schema is generated without an application, and then there is nothing to record
+    if app is not None:
+        api.add_middleware(ActivityMiddleware, recorder=app.activity)
 
-    for router in (files, search, service):
+    for router in (files, jobs, search, admin, service):
         api.include_router(router)
 
     return api

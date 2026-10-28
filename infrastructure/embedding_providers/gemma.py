@@ -18,7 +18,9 @@ from app import (
     FileStorage,
     UnsupportedTypeError,
 )
+from app.media import is_gif
 
+from ..animation import sample_animation
 from .configuration import Configuration
 
 logger = logging.getLogger(__name__)
@@ -66,7 +68,11 @@ def token_to_key(token: str) -> str:
     raise ValueError(token)
 
 
-Query = dict[str, str]
+# Values are text, a path, or the frames of a GIF
+Query = dict[str, Any]
+
+# A frame of a GIF is shrunk to this before the model sees it: the model scales it down anyway
+GIF_FRAME_SIDE = 640
 
 
 class Encoder(Protocol):
@@ -180,18 +186,21 @@ class GemmaEmbeddings(EmbeddingProvider):
         res: list[Embeddings] = list(arr)
         return res
 
-    def _document_descriptors(self, items: list[FileDescriptor]) -> list[Embeddings]:
-        TOKEN, NAME = 0, 1
-        tokens = [
-            (mime_to_token(x.content_type), str(self.file_storage.get_full_path(x.id)))
-            for x in items
-        ]
+    def _file_query(self, item: FileDescriptor) -> Query:
+        token = mime_to_token(item.content_type)
+        path = self.file_storage.get_full_path(item.id)
 
+        # A GIF of several frames is a short video, its first frame alone says little
+        if is_gif(item.content_type):
+            animation = sample_animation(path, self.config.gif_frames, GIF_FRAME_SIDE)
+            if animation is not None:
+                return {Key.TEXT: Token.VIDEO, Key.VIDEO: animation.frames}
+
+        return {Key.TEXT: token, token_to_key(token): str(path)}
+
+    def _document_descriptors(self, items: list[FileDescriptor]) -> list[Embeddings]:
         return self._encode_multiple(
-            [
-                {Key.TEXT: str(item[TOKEN]), token_to_key(item[TOKEN]): item[NAME]}
-                for item in tokens
-            ],
+            [self._file_query(x) for x in items],
             # The model card says prefixes are for text only, files go in as they are
             None,
         )

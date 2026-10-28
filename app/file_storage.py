@@ -2,7 +2,8 @@ import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from .file_storage_models import FileDescriptor, StoredFile
+from .file_storage_models import FileDescriptor, FileRecord, OwnerUsage, StoredFile
+from .thumbnails import Thumbnail
 
 
 class FileStorage(ABC):
@@ -44,6 +45,18 @@ class FileStorage(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def usage(self) -> list[OwnerUsage]:
+        """Stored files grouped by owner and kind"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_files(
+        self, owner_id: uuid.UUID | None, limit: int, offset: int
+    ) -> list[FileRecord]:
+        """Newest first. Files of every owner when owner_id is None"""
+        raise NotImplementedError
+
+    @abstractmethod
     def remove(self, id: uuid.UUID) -> None:
         """
         Removes the file together with its thumbnail
@@ -51,7 +64,7 @@ class FileStorage(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def save_thumbnail(self, id: uuid.UUID, data: bytes) -> None:
+    def save_thumbnail(self, id: uuid.UUID, thumbnail: Thumbnail) -> None:
         """
         Readers never see a partly written thumbnail
         """
@@ -62,7 +75,7 @@ class FileStorage(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_thumbnail(self, id: uuid.UUID) -> bytes:
+    def get_thumbnail(self, id: uuid.UUID) -> Thumbnail:
         """
         Raises FileNotFoundError when the file has no thumbnail
         """

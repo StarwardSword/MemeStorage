@@ -19,13 +19,18 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app import (
+    ANIMATED_THUMBNAIL_CONTENT_TYPE,
     THUMBNAIL_CONTENT_TYPE,
     Application,
+    EmbeddingsForbiddenError,
     FailureKind,
     FailureReport,
     FileDescriptor,
+    Principal,
+    QueueFullError,
     SaveMessage,
     WrongEmbeddingsError,
 )
@@ -38,12 +43,16 @@ from .schemas import (
     FileInfo,
     FileList,
     Health,
+    JobAccepted,
+    JobInfo,
     JsonVector,
     QuerySearchRequest,
     SaveFailure,
     SaveFailureKind,
     SaveMultipleResponse,
     SearchResponse,
+    SubmitMultipleResponse,
+    SubmittedFile,
 )
 
 CHUNK_SIZE = 64 * 1024
@@ -67,8 +76,17 @@ NOT_FOUND: dict[int | str, dict[str, Any]] = {
 FAILURE_KINDS: dict[FailureKind, SaveFailureKind] = {
     FailureKind.FILE_STORAGE: "file_storage",
     FailureKind.THUMBNAIL: "thumbnail",
+    FailureKind.UNREADABLE: "unreadable",
     FailureKind.EMBEDDING_MODEL: "embedding_model",
     FailureKind.VECTOR_STORAGE: "vector_storage",
+    FailureKind.LIMIT_EXCEEDED: "limit_exceeded",
+}
+
+TOO_LARGE: dict[int | str, dict[str, Any]] = {
+    status.HTTP_413_CONTENT_TOO_LARGE: {
+        "model": Error,
+        "description": "The file is larger or longer than the server limit, nothing is stored",
+    }
 }
 
 
@@ -77,6 +95,45 @@ async def get_application(request: Request) -> Application:
 
 
 ApplicationDep = Annotated[Application, Depends(get_application)]
+
+bearer = HTTPBearer(auto_error=False, description="Token of a user or the admin token")
+
+
+# Sync on purpose: finding a user is a database query, it runs in a worker thread
+def authenticate(
+    request: Request,
+    application: ApplicationDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> Principal:
+    principal = application.authenticate(
+        credentials.credentials if credentials else None
+    )
+    if principal is None:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "missing or invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # The activity log reads it after the response is sent
+    request.state.principal = principal
+    return principal
+
+
+PrincipalDep = Annotated[Principal, Depends(authenticate)]
+
+
+def require_admin(principal: PrincipalDep) -> Principal:
+    if not principal.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin token required")
+    return principal
+
+
+UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "model": Error,
+        "description": "Missing, wrong or revoked token",
+    }
+}
 
 
 # FileNotFoundError message may hold a server path, so the client gets only the id
@@ -97,11 +154,58 @@ def wrong_embeddings(field: str) -> RequestValidationError:
     )
 
 
-# Client errors are checked before saving, so what the application reports is a server failure
+# What only the application can find out and the client can fix: a file that is too big or too long,
+# or one that can not be decoded. Wrong requests are checked before saving, so the rest is a server failure.
+# 415 and not 422 for a damaged file: the detail of 422 is a list of field errors, clients parse it so
+CLIENT_FAILURES = {
+    FailureKind.LIMIT_EXCEEDED: status.HTTP_413_CONTENT_TOO_LARGE,
+    FailureKind.THUMBNAIL: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    FailureKind.UNREADABLE: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+}
+
+
 def save_failed(report: FailureReport) -> HTTPException:
-    return HTTPException(
-        status.HTTP_500_INTERNAL_SERVER_ERROR, f"{report.kind.value}: {report.value}"
-    )
+    code = CLIENT_FAILURES.get(report.kind, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return HTTPException(code, f"{report.kind.value}: {report.value}")
+
+
+EMBEDDINGS_FORBIDDEN: dict[int | str, dict[str, Any]] = {
+    status.HTTP_403_FORBIDDEN: {
+        "model": Error,
+        "description": "Ready embeddings were sent, but the user may not upload them",
+    }
+}
+
+
+# Ready embeddings go into the index as they are, so only users the admin trusted may send them.
+# Application reports a wrong dimension as a model failure, here it is a client error
+def ready_embeddings(
+    application: Application,
+    principal: Principal,
+    embeddings: list[float] | None,
+    text_embeddings: list[float] | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if embeddings is None and text_embeddings is None:
+        return None, None
+
+    try:
+        application.check_embeddings(principal)
+    except EmbeddingsForbiddenError as e:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from None
+
+    checked = []
+    for field, value in (
+        ("embeddings", embeddings),
+        ("text_embeddings", text_embeddings),
+    ):
+        vector = None if value is None else np.asarray(value, dtype=np.float32)
+        if (
+            vector is not None
+            and not application.embedding_provider.validate_embedding_dimension(vector)
+        ):
+            raise wrong_embeddings(field)
+        checked.append(vector)
+    return checked[0], checked[1]
 
 
 def save_failure(report: FailureReport) -> SaveFailure:
@@ -148,6 +252,37 @@ def file_data(file: UploadFile) -> Iterator[bytes]:
     return iter(partial(file.file.read, CHUNK_SIZE), b"")
 
 
+# With save strategy "fast" the model refuses a non-media file for the whole batch,
+# so such files are not passed to the application
+def batch_messages(
+    uploads: list[UploadFile], principal: Principal
+) -> tuple[list[SaveMessage], list[SaveFailure]]:
+    if not all(x.filename for x in uploads):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "every file must have a name")
+
+    rejected: list[SaveFailure] = []
+    messages: list[SaveMessage] = []
+    for upload in uploads:
+        content_type = detect_content_type(upload)
+        if not is_media(content_type):
+            rejected.append(
+                SaveFailure(
+                    kind="unsupported_type",
+                    message=f"{upload.filename}: {unsupported_type_message(content_type)}",
+                )
+            )
+            continue
+        messages.append(
+            SaveMessage(
+                original_name=upload.filename or "",
+                data=file_data(upload),
+                content_type=content_type,
+                owner_id=principal.user_id,
+            )
+        )
+    return messages, rejected
+
+
 def file_list(descriptors: list[FileDescriptor]) -> FileList:
     return FileList(items=[FileInfo.model_validate(x) for x in descriptors])
 
@@ -158,7 +293,12 @@ def search_response(found: list[list[FileDescriptor]]) -> SearchResponse:
 
 # --- files
 
-files = APIRouter(prefix="/files", tags=["files"])
+files = APIRouter(
+    prefix="/files",
+    tags=["files"],
+    dependencies=[Depends(authenticate)],
+    responses=UNAUTHORIZED,
+)
 
 
 @files.post(
@@ -179,16 +319,19 @@ files = APIRouter(prefix="/files", tags=["files"])
         },
         status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {
             "model": Error,
-            "description": "File is not an image, video or audio",
+            "description": "File is not an image, video or audio, or can not be decoded: it is damaged or not what its type says",
         },
+        **EMBEDDINGS_FORBIDDEN,
+        **TOO_LARGE,
         status.HTTP_500_INTERNAL_SERVER_ERROR: {
             "model": Error,
-            "description": "File storage, thumbnail, embedding model or vector storage failed, nothing is stored",
+            "description": "File storage, embedding model or vector storage failed, nothing is stored",
         },
     },
 )
 def save_file(
     application: ApplicationDep,
+    principal: PrincipalDep,
     file: Annotated[UploadFile, File(description="Image, video or audio file")],
     description: Annotated[
         str | None, Form(description="Text description, the file is also found by it")
@@ -209,29 +352,18 @@ def save_file(
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "file must have a name")
 
+    vector, text_vector = ready_embeddings(
+        application, principal, embeddings, text_embeddings
+    )
     msg = SaveMessage(
         original_name=file.filename,
         data=file_data(file),
         content_type=media_type(file),
         text_description=description,
-        embeddings=np.asarray(embeddings, dtype=np.float32)
-        if embeddings is not None
-        else None,
-        text_embeddings=np.asarray(text_embeddings, dtype=np.float32)
-        if text_embeddings is not None
-        else None,
+        embeddings=vector,
+        text_embeddings=text_vector,
+        owner_id=principal.user_id,
     )
-
-    # Application reports a wrong dimension as a model failure, here it is a client error
-    for field, value in (
-        ("embeddings", msg.embeddings),
-        ("text_embeddings", msg.text_embeddings),
-    ):
-        if (
-            value is not None
-            and not application.embedding_provider.validate_embedding_dimension(value)
-        ):
-            raise wrong_embeddings(field)
 
     failure = application.save(msg)
     if failure is not None:
@@ -256,37 +388,14 @@ def save_file(
 )
 def save_files(
     application: ApplicationDep,
+    principal: PrincipalDep,
     # Alias keeps the form field name without shadowing the router
     uploads: Annotated[
         list[UploadFile],
         File(alias="files", description="Image, video or audio files"),
     ],
 ) -> SaveMultipleResponse:
-    if not all(x.filename for x in uploads):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "every file must have a name")
-
-    # With save strategy "fast" the model refuses a non-media file for the whole batch,
-    # so such files are not passed to the application
-    rejected: list[SaveFailure] = []
-    messages: list[SaveMessage] = []
-    for upload in uploads:
-        content_type = detect_content_type(upload)
-        if not is_media(content_type):
-            rejected.append(
-                SaveFailure(
-                    kind="unsupported_type",
-                    message=f"{upload.filename}: {unsupported_type_message(content_type)}",
-                )
-            )
-            continue
-        messages.append(
-            SaveMessage(
-                original_name=upload.filename or "",
-                data=file_data(upload),
-                content_type=content_type,
-            )
-        )
-
+    messages, rejected = batch_messages(uploads, principal)
     failed = application.save_multiple(iter(messages))
     return SaveMultipleResponse(failed=rejected + [save_failure(x) for x in failed])
 
@@ -367,11 +476,15 @@ def get_file_info(file_id: uuid.UUID, application: ApplicationDep) -> FileInfo:
     response_class=Response,
     summary="Get file thumbnail",
     description="JPEG thumbnail of the file, the longest side is `thumbnails.size` from the server config. "
+    "A GIF of several frames gets an animated WebP instead: look at the `Content-Type`. "
     "Audio and files stored before thumbnails appeared get a placeholder of their type.",
     responses={
         status.HTTP_200_OK: {
             "description": "Thumbnail",
-            "content": {THUMBNAIL_CONTENT_TYPE: {}},
+            "content": {
+                THUMBNAIL_CONTENT_TYPE: {},
+                ANIMATED_THUMBNAIL_CONTENT_TYPE: {},
+            },
         },
         **NOT_FOUND,
     },
@@ -382,12 +495,158 @@ def get_thumbnail(file_id: uuid.UUID, application: ApplicationDep) -> Response:
     except FileNotFoundError:
         raise file_not_found(file_id) from None
 
-    return Response(thumbnail, media_type=THUMBNAIL_CONTENT_TYPE)
+    return Response(thumbnail.data, media_type=thumbnail.content_type)
+
+
+# --- jobs
+
+jobs = APIRouter(
+    prefix="/jobs",
+    tags=["jobs"],
+    dependencies=[Depends(authenticate)],
+    responses=UNAUTHORIZED,
+)
+
+QUEUE_FULL: dict[int | str, dict[str, Any]] = {
+    status.HTTP_429_TOO_MANY_REQUESTS: {
+        "model": Error,
+        "description": "The queue is full, try again later",
+    }
+}
+
+
+@jobs.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload a file and index it later",
+    description="Stores the file and answers at once, embedding runs in the background. "
+    "Poll `GET /jobs/{id}`: the file is searchable when the status is `done`. "
+    "Precomputed embeddings need the right to send them, as in `POST /files`. "
+    "Jobs that were queued survive a server restart.",
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": Error,
+            "description": "File part has no file name",
+        },
+        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {
+            "model": Error,
+            "description": "File is not an image, video or audio, or can not be decoded: it is damaged or not what its type says",
+        },
+        **EMBEDDINGS_FORBIDDEN,
+        **TOO_LARGE,
+        **QUEUE_FULL,
+    },
+)
+def submit_file(
+    application: ApplicationDep,
+    principal: PrincipalDep,
+    file: Annotated[UploadFile, File(description="Image, video or audio file")],
+    description: Annotated[
+        str | None, Form(description="Text description, the file is also found by it")
+    ] = None,
+    embeddings: Annotated[
+        JsonVector | None,
+        Form(
+            description="Precomputed file embedding as a JSON array of numbers, computed by the server when omitted"
+        ),
+    ] = None,
+    text_embeddings: Annotated[
+        JsonVector | None,
+        Form(
+            description="Precomputed description embedding as a JSON array of numbers"
+        ),
+    ] = None,
+) -> JobAccepted:
+    if not file.filename:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "file must have a name")
+
+    vector, text_vector = ready_embeddings(
+        application, principal, embeddings, text_embeddings
+    )
+    msg = SaveMessage(
+        original_name=file.filename,
+        data=file_data(file),
+        content_type=media_type(file),
+        text_description=description,
+        embeddings=vector,
+        text_embeddings=text_vector,
+        owner_id=principal.user_id,
+    )
+
+    try:
+        result = application.submit(msg)
+    except QueueFullError:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, "queue is full"
+        ) from None
+
+    if isinstance(result, FailureReport):
+        raise save_failed(result)
+    return JobAccepted(id=result.id)
+
+
+@jobs.post(
+    "/batch",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload several files and index them later",
+    description="Like `POST /jobs` for many files. A file that is refused, because of its type, size, "
+    "length or a full queue, goes to `failed` and does not fail the request.",
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": Error,
+            "description": "A file part has no file name, nothing is stored",
+        },
+    },
+)
+def submit_files(
+    application: ApplicationDep,
+    principal: PrincipalDep,
+    uploads: Annotated[
+        list[UploadFile],
+        File(alias="files", description="Image, video or audio files"),
+    ],
+) -> SubmitMultipleResponse:
+    messages, rejected = batch_messages(uploads, principal)
+    queued, failed = application.submit_multiple(iter(messages))
+    return SubmitMultipleResponse(
+        jobs=[SubmittedFile(id=j.id, filename=j.original_name) for j in queued],
+        failed=rejected + [save_failure(x) for x in failed],
+    )
+
+
+@jobs.get(
+    "/{job_id}",
+    summary="Get job status",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"model": Error, "description": "Job not found"}
+    },
+)
+def get_job(job_id: uuid.UUID, application: ApplicationDep) -> JobInfo:
+    job = application.get_job(job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"job not found: {job_id}")
+
+    error = None
+    if job.error_kind is not None:
+        error = SaveFailure(
+            kind=FAILURE_KINDS[job.error_kind], message=job.error_message or ""
+        )
+    return JobInfo(
+        id=job.id,
+        original_name=job.original_name,
+        status=job.status.value,
+        error=error,
+    )
 
 
 # --- search
 
-search = APIRouter(prefix="/search", tags=["search"])
+search = APIRouter(
+    prefix="/search",
+    tags=["search"],
+    dependencies=[Depends(authenticate)],
+    responses=UNAUTHORIZED,
+)
 
 
 @search.get(
@@ -396,12 +655,14 @@ search = APIRouter(prefix="/search", tags=["search"])
     description="Shorthand for `POST /search/query` with a single query.",
 )
 def search_files(
+    request: Request,
     application: ApplicationDep,
     q: Annotated[str, Query(min_length=1, description="Text query")],
     count: Annotated[
         int, Query(ge=1, le=MAX_COUNT, description="Number of files to return")
     ] = DEFAULT_COUNT,
 ) -> FileList:
+    request.state.detail = q
     return file_list(application.get_by_queries([q], count)[0])
 
 
@@ -411,8 +672,9 @@ def search_files(
     description="Finds the closest files for each query, matching both file contents and text descriptions.",
 )
 def search_by_query(
-    body: QuerySearchRequest, application: ApplicationDep
+    request: Request, body: QuerySearchRequest, application: ApplicationDep
 ) -> SearchResponse:
+    request.state.detail = " | ".join(body.queries)
     return search_response(application.get_by_queries(body.queries, body.count))
 
 

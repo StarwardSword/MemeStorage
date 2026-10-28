@@ -5,10 +5,25 @@ from os import stat
 from pathlib import Path
 from typing import Generator, override
 
-from app import FileDescriptor, FileStorage, StoredFile
+from app import (
+    ANIMATED_THUMBNAIL_CONTENT_TYPE,
+    THUMBNAIL_CONTENT_TYPE,
+    FileDescriptor,
+    FileRecord,
+    FileStorage,
+    OwnerUsage,
+    StoredFile,
+    Thumbnail,
+)
 
 from .config import Configuration
 from .database import SqliteDatabase
+
+# The name of a thumbnail tells its type, there is no record of it in the database
+THUMBNAIL_SUFFIXES = {
+    THUMBNAIL_CONTENT_TYPE: ".jpg",
+    ANIMATED_THUMBNAIL_CONTENT_TYPE: ".webp",
+}
 
 
 class LocalFileStorage(FileStorage):
@@ -27,19 +42,23 @@ class LocalFileStorage(FileStorage):
 
     @override
     def save(self, file: StoredFile) -> Path:
-        self.database.save(
-            FileDescriptor(
-                id=file.id,
-                original_name=file.original_name,
-                content_type=file.content_type,
-            )
-        )
-
         path = Path(self.root, str(file.id))
         try:
+            size = 0
             with open(path, "wb") as f:
                 for d in file.data:
                     f.write(d)
+                    size += len(d)
+            # Seen by others only when the file is complete
+            self.database.save(
+                FileDescriptor(
+                    id=file.id,
+                    original_name=file.original_name,
+                    content_type=file.content_type,
+                ),
+                file.owner_id,
+                size,
+            )
         except Exception:
             self.database.remove(file.id)
 
@@ -95,27 +114,47 @@ class LocalFileStorage(FileStorage):
         return self.database.get_all()
 
     @override
+    def usage(self) -> list[OwnerUsage]:
+        return self.database.usage()
+
+    @override
+    def list_files(
+        self, owner_id: uuid.UUID | None, limit: int, offset: int
+    ) -> list[FileRecord]:
+        return self.database.list_files(owner_id, limit, offset)
+
+    @override
     def remove(self, id: uuid.UUID):
-        for filename in (Path(self.root, str(id)), self._thumbnail_path(id)):
+        for filename in (
+            Path(self.root, str(id)),
+            *(self._thumbnail_path(id, c) for c in THUMBNAIL_SUFFIXES),
+        ):
             try:
                 os.remove(filename)
             except FileNotFoundError:
                 pass
         self.database.remove(id)
 
-    # Thumbnail exists when its file does, there is no record of it in the database
-    def _thumbnail_path(self, id: uuid.UUID) -> Path:
-        return Path(self.thumbnails_root, f"{id}.jpg")
+    def _thumbnail_path(self, id: uuid.UUID, content_type: str) -> Path:
+        return Path(self.thumbnails_root, f"{id}{THUMBNAIL_SUFFIXES[content_type]}")
+
+    # Thumbnail exists when its file does
+    def _stored_thumbnail(self, id: uuid.UUID) -> tuple[Path, str] | None:
+        for content_type in THUMBNAIL_SUFFIXES:
+            path = self._thumbnail_path(id, content_type)
+            if path.is_file():
+                return path, content_type
+        return None
 
     # Written aside and moved in place, so a thumbnail requested while the backfill script
     # writes it is either missing or whole
     @override
-    def save_thumbnail(self, id: uuid.UUID, data: bytes) -> None:
-        path = self._thumbnail_path(id)
+    def save_thumbnail(self, id: uuid.UUID, thumbnail: Thumbnail) -> None:
+        path = self._thumbnail_path(id, thumbnail.content_type)
         # Server and the script are different processes and may write the same thumbnail
         temporary = Path(self.thumbnails_root, f"{id}.{os.getpid()}.tmp")
         try:
-            temporary.write_bytes(data)
+            temporary.write_bytes(thumbnail.data)
             os.replace(temporary, path)
         except BaseException:
             try:
@@ -124,13 +163,25 @@ class LocalFileStorage(FileStorage):
                 pass
             raise
 
-    @override
-    def has_thumbnail(self, id: uuid.UUID) -> bool:
-        return self._thumbnail_path(id).is_file()
+        # A still thumbnail replaced by a moving one, or the other way round, must not stay behind
+        for content_type in THUMBNAIL_SUFFIXES:
+            if content_type != thumbnail.content_type:
+                try:
+                    os.remove(self._thumbnail_path(id, content_type))
+                except FileNotFoundError:
+                    pass
 
     @override
-    def get_thumbnail(self, id: uuid.UUID) -> bytes:
-        return self._thumbnail_path(id).read_bytes()
+    def has_thumbnail(self, id: uuid.UUID) -> bool:
+        return self._stored_thumbnail(id) is not None
+
+    @override
+    def get_thumbnail(self, id: uuid.UUID) -> Thumbnail:
+        stored = self._stored_thumbnail(id)
+        if stored is None:
+            raise FileNotFoundError(str(id))
+        path, content_type = stored
+        return Thumbnail(data=path.read_bytes(), content_type=content_type)
 
     @override
     def get_full_path(self, id: uuid.UUID) -> Path:

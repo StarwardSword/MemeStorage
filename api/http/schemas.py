@@ -13,6 +13,8 @@ from pydantic import (
     field_validator,
 )
 
+from app import User
+
 MAX_BATCH = 32
 MAX_COUNT = 100
 DEFAULT_COUNT = 10
@@ -84,15 +86,23 @@ class EmbeddingSearchRequest(BaseModel):
 
 
 SaveFailureKind = Literal[
-    "unsupported_type", "file_storage", "thumbnail", "embedding_model", "vector_storage"
+    "unsupported_type",
+    "file_storage",
+    "thumbnail",
+    "unreadable",
+    "embedding_model",
+    "vector_storage",
+    "limit_exceeded",
 ]
+JobStatus = Literal["pending", "running", "done", "failed"]
 
 
 class SaveFailure(BaseModel):
     kind: SaveFailureKind = Field(
         description="Stage that failed. `unsupported_type`: the file is not an image, video or audio "
-        "and was not passed to the application; `thumbnail`: the file could not be decoded to build its thumbnail; "
-        "`embedding_model` includes a wrong embedding dimension"
+        "and was not passed to the application; `thumbnail`: the file could not be decoded to build its thumbnail; `unreadable`: the file can not be read to check its length; "
+        "`embedding_model` includes a wrong embedding dimension; "
+        "`limit_exceeded`: the file is too big or too long, or the batch or the queue is full"
     )
     message: str = Field(
         description="Usually holds the file name, but not always: "
@@ -103,6 +113,63 @@ class SaveFailure(BaseModel):
 class SaveMultipleResponse(BaseModel):
     failed: list[SaveFailure] = Field(
         description="Files that were not saved, the rest are saved"
+    )
+
+
+class JobAccepted(BaseModel):
+    id: uuid.UUID = Field(
+        description="Job id, it is also the id of the stored file: `GET /jobs/{id}` tells when it is searchable"
+    )
+
+
+class SubmittedFile(JobAccepted):
+    filename: str
+
+
+class SubmitMultipleResponse(BaseModel):
+    jobs: list[SubmittedFile] = Field(description="Files that were queued")
+    failed: list[SaveFailure] = Field(
+        description="Files that were refused, the rest are queued"
+    )
+
+
+class JobInfo(BaseModel):
+    id: uuid.UUID
+    original_name: str
+    status: JobStatus = Field(
+        description="`pending` waits in the queue, `running` is being indexed, "
+        "`done` is searchable, `failed` was removed and `error` tells why"
+    )
+    error: SaveFailure | None = None
+
+
+class UserCreate(BaseModel):
+    name: str = Field(
+        min_length=1,
+        max_length=64,
+        description="Letters, digits, spaces, dots and dashes. Unique, a deleted user keeps its name",
+    )
+    allow_embeddings: bool = Field(
+        default=False,
+        description="May upload ready embeddings. They go into the index as they are, so give it to trusted users",
+    )
+
+
+class UserUpdate(BaseModel):
+    allow_embeddings: bool
+
+
+class UserCreated(BaseModel):
+    user: User
+    token: str = Field(
+        description="Token of the user for `Authorization: Bearer`. Shown only now"
+    )
+
+
+class TokenResponse(BaseModel):
+    token: str = Field(description="New token, the old one does not work anymore")
+    restored: bool = Field(
+        description="The user was deleted and is active again with this token"
     )
 
 

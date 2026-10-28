@@ -1,6 +1,9 @@
 import argparse
+import collections
+import os
 import sys
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from mimetypes import guess_type
@@ -12,6 +15,7 @@ import grpc
 from api.grpc.proto import service_pb2, service_pb2_grpc
 
 DEFAULT_SERVER = "localhost:50051"
+TOKEN_ENV = "MEMESTORAGE_TOKEN"
 CHUNK_SIZE = 64 * 1024
 TIMEOUT = 300
 DEFAULT_JOBS = 4
@@ -23,8 +27,63 @@ class ProtocolError(Exception):
     pass
 
 
-def connect(server: str) -> service_pb2_grpc.MemeStorageStub:
-    return service_pb2_grpc.MemeStorageStub(grpc.insecure_channel(server))
+class _Details(
+    collections.namedtuple(
+        "_Details",
+        (
+            "method",
+            "timeout",
+            "metadata",
+            "credentials",
+            "wait_for_ready",
+            "compression",
+        ),
+    ),
+    grpc.ClientCallDetails,
+):
+    pass
+
+
+# Puts the token into the metadata of every call, the commands do not have to know about it
+class Authorization(
+    grpc.UnaryUnaryClientInterceptor,
+    grpc.UnaryStreamClientInterceptor,
+    grpc.StreamUnaryClientInterceptor,
+):
+    def __init__(self, token: str) -> None:
+        self.token = token
+
+    def _details(self, d: grpc.ClientCallDetails) -> grpc.ClientCallDetails:
+        metadata = [*(d.metadata or ()), ("authorization", f"Bearer {self.token}")]
+        return _Details(
+            d.method,
+            d.timeout,
+            metadata,
+            d.credentials,
+            d.wait_for_ready,
+            d.compression,
+        )
+
+    def intercept_unary_unary(self, continuation, details, request):
+        return continuation(self._details(details), request)
+
+    def intercept_unary_stream(self, continuation, details, request):
+        return continuation(self._details(details), request)
+
+    def intercept_stream_unary(self, continuation, details, request_iterator):
+        return continuation(self._details(details), request_iterator)
+
+
+def connect(
+    server: str, token: str, tls: bool = False
+) -> service_pb2_grpc.MemeStorageStub:
+    channel = (
+        grpc.secure_channel(server, grpc.ssl_channel_credentials())
+        if tls
+        else grpc.insecure_channel(server)
+    )
+    channel = grpc.intercept_channel(channel, Authorization(token))
+    return service_pb2_grpc.MemeStorageStub(channel)
 
 
 # --- upload
@@ -249,6 +308,196 @@ def get(
     return download_all(stub, ids, output)
 
 
+# --- users and statistics, they need the admin token
+
+
+def when(seconds: float | None) -> str:
+    if not seconds:
+        return "-"
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(seconds))
+
+
+def size(n: int) -> str:
+    value = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{n} B"
+
+
+def table(header: list[str], rows: list[list[str]]) -> None:
+    if not rows:
+        print("  (nothing)")
+        return
+    widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
+    for r in [header, *rows]:
+        print("  " + "  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip())
+
+
+def find_user(
+    stub: service_pb2_grpc.MemeStorageStub, ref: str, deleted: bool = False
+) -> service_pb2.UserInfo | None:
+    users = stub.ListUsers(service_pb2.Empty(), timeout=TIMEOUT).users
+    if is_uuid(ref):
+        return next((u for u in users if u.uuid == str(uuid.UUID(ref))), None)
+    # A name is never taken twice, so there is one match at most
+    same = [u for u in users if u.name == ref]
+    return same[0] if same and (deleted or not same[0].HasField("deleted_at")) else None
+
+
+def show_user(u: service_pb2.UserInfo) -> str:
+    flags = [
+        "embeddings" if u.allow_embeddings else "",
+        "deleted" if u.HasField("deleted_at") else "",
+    ]
+    return f"{u.uuid}  {u.name}  {' '.join(f for f in flags if f)}".rstrip()
+
+
+def user_command(
+    stub: service_pb2_grpc.MemeStorageStub, args: argparse.Namespace
+) -> int:
+    if args.action == "create":
+        r = stub.CreateUser(
+            service_pb2.CreateUserRequest(
+                name=args.name, allow_embeddings=args.embeddings
+            ),
+            timeout=TIMEOUT,
+        )
+        print(show_user(r.user))
+        print(f"token: {r.token}")
+        print("The token is shown once, store it now.")
+        return 0
+
+    if args.action == "list":
+        users = stub.ListUsers(service_pb2.Empty(), timeout=TIMEOUT).users
+        table(
+            ["id", "name", "embeddings", "created", "deleted"],
+            [
+                [
+                    u.uuid,
+                    u.name,
+                    "yes" if u.allow_embeddings else "no",
+                    when(u.created_at),
+                    when(u.deleted_at) if u.HasField("deleted_at") else "",
+                ]
+                for u in users
+            ],
+        )
+        return 0
+
+    user = find_user(stub, args.user, deleted=args.action == "token")
+    if user is None:
+        print(f"No such user: {args.user}")
+        return 1
+
+    if args.action == "delete":
+        stub.DeleteUser(service_pb2.UUIDRequest(uuid=user.uuid), timeout=TIMEOUT)
+        print(
+            f"Deleted {user.name}: the token is revoked, the files and the statistics stay"
+        )
+    elif args.action == "token":
+        r = stub.RotateToken(service_pb2.UUIDRequest(uuid=user.uuid), timeout=TIMEOUT)
+        if r.restored:
+            print(f"{user.name} was deleted and is active again")
+        print(f"token: {r.token}")
+        print("The old token does not work anymore. The new one is shown once.")
+    else:
+        updated = stub.UpdateUser(
+            service_pb2.UpdateUserRequest(
+                uuid=user.uuid, allow_embeddings=args.embeddings
+            ),
+            timeout=TIMEOUT,
+        )
+        print(show_user(updated))
+    return 0
+
+
+def stats_command(
+    stub: service_pb2_grpc.MemeStorageStub, args: argparse.Namespace
+) -> int:
+    stored = stub.GetStats(service_pb2.Empty(), timeout=TIMEOUT)
+    print(f"Stored files: {stored.files}, {size(stored.bytes)}")
+    rows = []
+    for u in sorted(stored.users, key=lambda u: -u.bytes):
+        by = u.by_type
+        rows.append(
+            [
+                (u.name or "(no owner)") + (" (deleted)" if u.deleted else ""),
+                str(u.files),
+                size(u.bytes),
+                *[
+                    f"{by[k].files} / {size(by[k].bytes)}" if k in by else "-"
+                    for k in ("image", "video", "audio")
+                ],
+                when(u.last_upload) if u.HasField("last_upload") else "-",
+            ]
+        )
+    table(["user", "files", "size", "images", "videos", "audio", "last upload"], rows)
+
+    request = service_pb2.ActivityRequest()
+    if args.days:
+        request.since = time.time() - args.days * 86400
+    try:
+        a = stub.GetActivity(request, timeout=TIMEOUT)
+    except grpc.RpcError as e:
+        if e.code() != grpc.StatusCode.UNAVAILABLE:
+            raise
+        print("\nActivity log is turned off")
+        return 0
+
+    print(f"\nActivity, {when(a.since)} - {when(a.until)}")
+    print(
+        f"  {a.requests} requests: {a.ok} ok, {a.denied} denied, {a.client_error} client errors, "
+        f"{a.server_error} server errors; average {a.avg_ms:.0f} ms; "
+        f"in {size(a.bytes_in)}, out {size(a.bytes_out)}"
+    )
+    print("\nBy action")
+    table(
+        ["action", "requests", "errors", "avg ms", "p95 ms", "max ms", "in", "out"],
+        [
+            [
+                x.action,
+                str(x.requests),
+                str(x.requests - x.ok),
+                f"{x.avg_ms:.0f}",
+                f"{x.p95_ms:.0f}",
+                f"{x.max_ms:.0f}",
+                size(x.bytes_in),
+                size(x.bytes_out),
+            ]
+            for x in a.by_action
+        ],
+    )
+    print("\nBy user")
+    table(
+        ["user", "requests", "errors", "in", "out", "last seen"],
+        [
+            [
+                x.actor or "(nobody)",
+                str(x.requests),
+                str(x.errors),
+                size(x.bytes_in),
+                size(x.bytes_out),
+                when(x.last_seen),
+            ]
+            for x in a.by_actor
+        ],
+    )
+    if a.top_queries:
+        print("\nTop queries")
+        table(
+            ["queries", "query"], [[str(q.count), q.query] for q in a.top_queries[:10]]
+        )
+    if a.jobs_by_status:
+        jobs = ", ".join(f"{k}: {v}" for k, v in sorted(a.jobs_by_status.items()))
+        why = ", ".join(f"{k}: {v}" for k, v in sorted(a.job_failures.items()))
+        print(f"\nBackground jobs: {jobs}" + (f" (failed: {why})" if why else ""))
+    if a.dropped:
+        print(f"\n{a.dropped} events were lost, the log writer could not keep up")
+    return 0
+
+
 # --- entry point
 
 
@@ -273,6 +522,17 @@ def main() -> int:
         "--server",
         default=DEFAULT_SERVER,
         help=f"server address (default: {DEFAULT_SERVER})",
+    )
+    parser.add_argument(
+        "--tls",
+        action="store_true",
+        help="connect over TLS, for a server behind a reverse proxy",
+    )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get(TOKEN_ENV),
+        help=f"token of a user, or the admin token (default: ${TOKEN_ENV}). "
+        "Prefer the variable, arguments are visible to other users of the machine",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -327,7 +587,49 @@ def main() -> int:
         "-o", "--output", type=Path, required=True, help="directory to save files to"
     )
 
+    user_cmd = commands.add_parser("user", help="manage users (admin token)")
+    user_actions = user_cmd.add_subparsers(dest="action", required=True)
+    create_cmd = user_actions.add_parser(
+        "create", help="make a user and print its token"
+    )
+    create_cmd.add_argument("name")
+    create_cmd.add_argument(
+        "--embeddings", action="store_true", help="the user may upload ready embeddings"
+    )
+    user_actions.add_parser("list", help="list users, deleted ones too")
+    for action, text in (
+        ("delete", "revoke the token, the files and the statistics stay"),
+        (
+            "token",
+            "make a new token, the old one stops working; also brings a deleted user back",
+        ),
+    ):
+        user_actions.add_parser(action, help=text).add_argument(
+            "user", help="id or name"
+        )
+    set_cmd = user_actions.add_parser("set", help="change what a user may do")
+    set_cmd.add_argument("user", help="id or name")
+    set_cmd.add_argument(
+        "--embeddings",
+        action=argparse.BooleanOptionalAction,
+        required=True,
+        help="may upload ready embeddings",
+    )
+
+    stats_cmd = commands.add_parser(
+        "stats", help="who uploaded what and what happened on the server (admin token)"
+    )
+    stats_cmd.add_argument(
+        "--days",
+        type=positive_int,
+        default=7,
+        help="period of the activity (default: 7)",
+    )
+
     args = parser.parse_args()
+
+    if not args.token:
+        parser.error(f"a token is needed: pass --token or set ${TOKEN_ENV}")
 
     # One malformed id cancels the whole download, nothing is fetched
     if args.command == "download":
@@ -335,7 +637,7 @@ def main() -> int:
         if invalid:
             parser.error(f"invalid uuid: {', '.join(invalid)}")
 
-    stub = connect(args.server)
+    stub = connect(args.server, args.token, args.tls)
 
     try:
         match args.command:
@@ -350,10 +652,17 @@ def main() -> int:
                 )
             case "get":
                 return get(stub, args.query, args.output, args.count)
+            case "user":
+                return user_command(stub, args)
+            case "stats":
+                return stats_command(stub, args)
             case _:
                 return download_all(stub, args.ids, args.output)
     except FileNotFoundError as e:
         print(f"Not found: {e}")
+        return 1
+    except grpc.RpcError as e:
+        print(f"FAIL  {e.code().name}: {e.details()}")
         return 1
     except KeyboardInterrupt:
         print("Interrupted")

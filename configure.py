@@ -8,7 +8,12 @@ from pydantic_settings import (
 )
 
 from api import GRPCConfiguration, HTTPConfiguration
-from app import ApplicationConfiguration
+from app import (
+    ActivityConfiguration,
+    ApplicationConfiguration,
+    AuthConfiguration,
+    Limits,
+)
 from infrastructure import (
     ChromaConfiguration,
     FileStorageConfiguration,
@@ -29,6 +34,9 @@ class Configuration(BaseSettings):
     chroma: ChromaConfiguration
     files: FileStorageConfiguration
     app: ApplicationConfiguration
+    auth: AuthConfiguration
+    activity: ActivityConfiguration = ActivityConfiguration()
+    limits: Limits = Limits()
     thumbnails: ThumbnailsConfiguration = ThumbnailsConfiguration()
     grpc: GRPCConfiguration | None = None
     http: HTTPConfiguration | None = None
