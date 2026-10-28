@@ -66,10 +66,10 @@ def save_message(
         data=data,
         content_type=content_type,
         text_description=info.text_description if info.text_description != "" else None,
-        embeddings=np.array(info.embeddings.value)
+        embeddings=np.array(info.embeddings.value, dtype=np.float32)
         if len(info.embeddings.value) != 0
         else None,
-        text_embeddings=np.array(info.text_embeddings.value)
+        text_embeddings=np.array(info.text_embeddings.value, dtype=np.float32)
         if len(info.text_embeddings.value) != 0
         else None,
     )
@@ -265,7 +265,8 @@ class MemeStorageService(service_pb2_grpc.MemeStorageServicer):
         return self._search(
             request.record_count,
             lambda: self.app.get_by_embeddings(
-                [np.array(x.value) for x in request.embeddings], request.record_count
+                [np.array(x.value, dtype=np.float32) for x in request.embeddings],
+                request.record_count,
             ),
             context,
         )

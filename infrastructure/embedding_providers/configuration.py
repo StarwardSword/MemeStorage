@@ -1,12 +1,19 @@
-from pydantic import BaseModel, field_validator
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 from torch.cuda import is_available as cuda_available
 
 
 class Configuration(BaseModel):
     device: str = "cpu"
     dtype: str = "float32"
-    semaphore_count: int = 4
-    max_batch: int
+    semaphore_count: int = Field(default=4, ge=1)
+    max_batch: int = Field(ge=1)
+    threads: int | None = Field(default=None, ge=1)
+    truncate_dim: Literal[128, 256, 512, 768] | None = None
+    idle_unload_seconds: float | None = Field(default=None, gt=0)
+    # How many search texts keep their embedding in memory, 0 turns the cache off
+    query_cache_size: int = Field(default=256, ge=0)
 
     @field_validator("device")
     @classmethod
@@ -18,7 +25,7 @@ class Configuration(BaseModel):
             )
 
         if v == "cuda" and not cuda_available():
-            raise ValueError(f"cuda selected but torch.cuda is not available")
+            raise ValueError("cuda selected but torch.cuda is not available")
 
         return v
 

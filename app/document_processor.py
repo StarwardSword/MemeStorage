@@ -47,7 +47,7 @@ class DocumentProcessor:
             return [
                 FailureReport(
                     item_id=x.id,
-                    value=f"batch failure",
+                    value="batch failure",
                     kind=FailureKind.VECTOR_STORAGE,
                 )
                 for x in items
@@ -68,7 +68,7 @@ class DocumentProcessor:
             for record in items:
                 try:
                     self.storage.save([record])
-                except:
+                except Exception:
                     failed.append(record)
 
         return [
