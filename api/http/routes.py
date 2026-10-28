@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app import (
+    ANIMATED_THUMBNAIL_CONTENT_TYPE,
     THUMBNAIL_CONTENT_TYPE,
     Application,
     EmbeddingsForbiddenError,
@@ -75,6 +76,7 @@ NOT_FOUND: dict[int | str, dict[str, Any]] = {
 FAILURE_KINDS: dict[FailureKind, SaveFailureKind] = {
     FailureKind.FILE_STORAGE: "file_storage",
     FailureKind.THUMBNAIL: "thumbnail",
+    FailureKind.UNREADABLE: "unreadable",
     FailureKind.EMBEDDING_MODEL: "embedding_model",
     FailureKind.VECTOR_STORAGE: "vector_storage",
     FailureKind.LIMIT_EXCEEDED: "limit_exceeded",
@@ -158,6 +160,7 @@ def wrong_embeddings(field: str) -> RequestValidationError:
 CLIENT_FAILURES = {
     FailureKind.LIMIT_EXCEEDED: status.HTTP_413_CONTENT_TOO_LARGE,
     FailureKind.THUMBNAIL: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    FailureKind.UNREADABLE: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
 }
 
 
@@ -473,11 +476,15 @@ def get_file_info(file_id: uuid.UUID, application: ApplicationDep) -> FileInfo:
     response_class=Response,
     summary="Get file thumbnail",
     description="JPEG thumbnail of the file, the longest side is `thumbnails.size` from the server config. "
+    "A GIF of several frames gets an animated WebP instead: look at the `Content-Type`. "
     "Audio and files stored before thumbnails appeared get a placeholder of their type.",
     responses={
         status.HTTP_200_OK: {
             "description": "Thumbnail",
-            "content": {THUMBNAIL_CONTENT_TYPE: {}},
+            "content": {
+                THUMBNAIL_CONTENT_TYPE: {},
+                ANIMATED_THUMBNAIL_CONTENT_TYPE: {},
+            },
         },
         **NOT_FOUND,
     },
@@ -488,7 +495,7 @@ def get_thumbnail(file_id: uuid.UUID, application: ApplicationDep) -> Response:
     except FileNotFoundError:
         raise file_not_found(file_id) from None
 
-    return Response(thumbnail, media_type=THUMBNAIL_CONTENT_TYPE)
+    return Response(thumbnail.data, media_type=thumbnail.content_type)
 
 
 # --- jobs

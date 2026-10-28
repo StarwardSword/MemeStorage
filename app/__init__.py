@@ -38,7 +38,12 @@ from .limits import LimitExceededError, Limits
 from .media import MediaProbe
 from .stats import Stats, TypeUsage, UserStats
 from .storage import Record, RecordNotFoundError, Storage
-from .thumbnails import THUMBNAIL_CONTENT_TYPE, ThumbnailGenerator
+from .thumbnails import (
+    ANIMATED_THUMBNAIL_CONTENT_TYPE,
+    THUMBNAIL_CONTENT_TYPE,
+    Thumbnail,
+    ThumbnailGenerator,
+)
 
 __all__ = [
     "ApplicationConfiguration",
@@ -91,4 +96,6 @@ __all__ = [
     "FailureReport",
     "ThumbnailGenerator",
     "THUMBNAIL_CONTENT_TYPE",
+    "ANIMATED_THUMBNAIL_CONTENT_TYPE",
+    "Thumbnail",
 ]

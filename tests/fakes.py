@@ -8,6 +8,7 @@ from app import (
     ApplicationConfiguration,
     AuthConfiguration,
     Limits,
+    Thumbnail,
     ThumbnailGenerator,
 )
 from app.document_processor import SaveMessage
@@ -23,7 +24,7 @@ class NoThumbnails(ThumbnailGenerator):
         return None
 
     def placeholder(self, content_type):
-        return b""
+        return Thumbnail(data=b"", content_type="image/jpeg")
 
 
 class BrokenThumbnails(NoThumbnails):
@@ -48,8 +49,8 @@ class FakeFiles:
         self.stored.pop(id, None)
         self.thumbnails.pop(id, None)
 
-    def save_thumbnail(self, id, data):
-        self.thumbnails[id] = data
+    def save_thumbnail(self, id, thumbnail):
+        self.thumbnails[id] = thumbnail.data
 
     def get_full_path(self, id):
         return Path(str(id))

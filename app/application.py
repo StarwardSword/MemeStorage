@@ -36,7 +36,7 @@ from .limits import Limits
 from .media import MediaProbe
 from .stats import Stats, TypeUsage, UserStats
 from .storage import Storage
-from .thumbnails import ThumbnailGenerator
+from .thumbnails import Thumbnail, ThumbnailGenerator
 
 
 class Application:
@@ -98,9 +98,9 @@ class Application:
     def get_file(self, id: uuid.UUID) -> StoredFile:
         return self.file_storage.get(id)
 
-    # JPEG bytes, see THUMBNAIL_CONTENT_TYPE. Audio never has its own thumbnail and files
+    # JPEG, or animated WebP for an animated GIF. Audio never has its own thumbnail and files
     # stored before thumbnails appeared may lack one, both get a placeholder of their type
-    def get_thumbnail(self, id: uuid.UUID) -> bytes:
+    def get_thumbnail(self, id: uuid.UUID) -> Thumbnail:
         descriptor = self.file_storage.descriptor(id)
         try:
             return self.file_storage.get_thumbnail(id)

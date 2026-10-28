@@ -14,6 +14,8 @@ class Configuration(BaseModel):
     threads: int | None = Field(default=None, ge=1)
     truncate_dim: Literal[128, 256, 512, 768] | None = None
     idle_unload_seconds: float | None = Field(default=None, gt=0)
+    # A GIF is embedded from this many of its frames, spread evenly
+    gif_frames: int = Field(default=8, ge=1)
     # How many search texts keep their embedding in memory, 0 turns the cache off
     query_cache_size: int = Field(default=256, ge=0)
 

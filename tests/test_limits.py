@@ -1,6 +1,6 @@
 import unittest
 
-from app import FailureKind, Limits, MediaProbe
+from app import FailureKind, Limits, MediaProbe, Thumbnail
 from app.document_processor import DocumentProcessor
 from app.limits import LimitExceededError, limited
 
@@ -74,8 +74,8 @@ class AcceptTest(unittest.TestCase):
 
     def test_long_video_is_rejected_before_the_model(self):
         p, files = processor(Limits(max_video_seconds=10), FakeProbe(60))
-        descriptors, messages, _ = p.accept(iter([message("v.mp4", 5, "video/mp4")]))
-        fails = p.index(descriptors, messages)
+        descriptors, _, fails = p.accept(iter([message("v.mp4", 5, "video/mp4")]))
+        self.assertEqual(descriptors, [])
         self.assertEqual([f.kind for f in fails], [FailureKind.LIMIT_EXCEEDED])
         self.assertIn("60 s", fails[0].value)
         self.assertEqual(files.stored, {})
@@ -96,7 +96,7 @@ class AcceptTest(unittest.TestCase):
     def test_a_thumbnail_is_stored_with_the_file(self):
         class Small(NoThumbnails):
             def generate(self, source, content_type):
-                return b"jpeg"
+                return Thumbnail(data=b"jpeg", content_type="image/jpeg")
 
         p, files = processor(Limits())
         p.thumbnail_generator = Small()
@@ -110,9 +110,9 @@ class AcceptTest(unittest.TestCase):
                 raise OSError("bad header")
 
         p, _ = processor(Limits(max_audio_seconds=10), Broken())
-        descriptors, messages, _ = p.accept(iter([message("a.wav", 5, "audio/wav")]))
-        fails = p.index(descriptors, messages)
-        self.assertEqual([f.kind for f in fails], [FailureKind.EMBEDDING_MODEL])
+        descriptors, _, fails = p.accept(iter([message("a.wav", 5, "audio/wav")]))
+        self.assertEqual(descriptors, [])
+        self.assertEqual([f.kind for f in fails], [FailureKind.UNREADABLE])
         self.assertIn("bad header", fails[0].value)
 
 

@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from .file_storage_models import FileDescriptor, FileRecord, OwnerUsage, StoredFile
+from .thumbnails import Thumbnail
 
 
 class FileStorage(ABC):
@@ -63,7 +64,7 @@ class FileStorage(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def save_thumbnail(self, id: uuid.UUID, data: bytes) -> None:
+    def save_thumbnail(self, id: uuid.UUID, thumbnail: Thumbnail) -> None:
         """
         Readers never see a partly written thumbnail
         """
@@ -74,7 +75,7 @@ class FileStorage(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_thumbnail(self, id: uuid.UUID) -> bytes:
+    def get_thumbnail(self, id: uuid.UUID) -> Thumbnail:
         """
         Raises FileNotFoundError when the file has no thumbnail
         """

@@ -8,7 +8,6 @@ import grpc
 import numpy as np
 
 from app import (
-    THUMBNAIL_CONTENT_TYPE,
     ActivityDisabledError,
     Application,
     EmbeddingsForbiddenError,
@@ -38,6 +37,7 @@ MEDIA_PREFIXES = ("image/", "video/", "audio/")
 FAILURE_KINDS = {
     FailureKind.FILE_STORAGE: pb2.SaveFailure.FILE_STORAGE,
     FailureKind.THUMBNAIL: pb2.SaveFailure.THUMBNAIL,
+    FailureKind.UNREADABLE: pb2.SaveFailure.UNREADABLE,
     FailureKind.EMBEDDING_MODEL: pb2.SaveFailure.EMBEDDING_MODEL,
     FailureKind.VECTOR_STORAGE: pb2.SaveFailure.VECTOR_STORAGE,
     FailureKind.LIMIT_EXCEEDED: pb2.SaveFailure.LIMIT_EXCEEDED,
@@ -79,6 +79,7 @@ def failure_message(report: FailureReport) -> str:
 CLIENT_FAILURES = {
     FailureKind.LIMIT_EXCEEDED: grpc.StatusCode.RESOURCE_EXHAUSTED,
     FailureKind.THUMBNAIL: grpc.StatusCode.INVALID_ARGUMENT,
+    FailureKind.UNREADABLE: grpc.StatusCode.INVALID_ARGUMENT,
 }
 
 
@@ -414,7 +415,7 @@ class MemeStorageService(service_pb2_grpc.MemeStorageServicer):
             context.abort(grpc.StatusCode.NOT_FOUND, f"file not found: {file_id}")
 
         return pb2.ThumbnailResponse(
-            content_type=THUMBNAIL_CONTENT_TYPE, data=thumbnail
+            content_type=thumbnail.content_type, data=thumbnail.data
         )
 
     @staticmethod

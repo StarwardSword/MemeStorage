@@ -227,9 +227,10 @@ paths:
       tags:
       - files
       summary: Get file thumbnail
-      description: JPEG thumbnail of the file, the longest side is `thumbnails.size`
-        from the server config. Audio and files stored before thumbnails appeared
-        get a placeholder of their type.
+      description: 'JPEG thumbnail of the file, the longest side is `thumbnails.size`
+        from the server config. A GIF of several frames gets an animated WebP instead:
+        look at the `Content-Type`. Audio and files stored before thumbnails appeared
+        get a placeholder of their type.'
       operationId: get_thumbnail
       security:
       - HTTPBearer: []
@@ -246,6 +247,7 @@ paths:
           description: Thumbnail
           content:
             image/jpeg: {}
+            image/webp: {}
         '401':
           description: Missing, wrong or revoked token
           content:
@@ -1711,15 +1713,17 @@ components:
           - unsupported_type
           - file_storage
           - thumbnail
+          - unreadable
           - embedding_model
           - vector_storage
           - limit_exceeded
           title: Kind
           description: 'Stage that failed. `unsupported_type`: the file is not an
             image, video or audio and was not passed to the application; `thumbnail`:
-            the file could not be decoded to build its thumbnail; `embedding_model`
-            includes a wrong embedding dimension; `limit_exceeded`: the file is too
-            big or too long, or the batch or the queue is full'
+            the file could not be decoded to build its thumbnail; `unreadable`: the
+            file can not be read to check its length; `embedding_model` includes a
+            wrong embedding dimension; `limit_exceeded`: the file is too big or too
+            long, or the batch or the queue is full'
         message:
           type: string
           title: Message

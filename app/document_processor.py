@@ -245,6 +245,12 @@ class DocumentProcessor:
                 id=id, original_name=original_name, content_type=msg.content_type
             )
 
+            refused = self._check_media(descriptor)
+            if refused is not None:
+                self.file_storage.remove(id)
+                fails.append(refused)
+                continue
+
             try:
                 self._save_thumbnail(descriptor)
             except KeyboardInterrupt:
@@ -269,53 +275,59 @@ class DocumentProcessor:
 
         return res, messages, fails
 
-    # Duration is read from the stored file, so this runs after the file storage stage
-    def _check_duration(self, descriptors: list[FileDescriptor]) -> list[FailureReport]:
-        failed: list[FailureReport] = []
-        if self.media_probe is None:
-            return failed
+    # Length and frames are read from the stored file. This runs first, before the thumbnail
+    # is built: a GIF of thousands of frames must be refused before it is decoded
+    def _check_media(self, d: FileDescriptor) -> FailureReport | None:
+        seconds_limit = self.limits.max_seconds(d.content_type)
+        frames_limit = self.limits.max_frames(d.content_type)
+        if self.media_probe is None or (seconds_limit is None and frames_limit is None):
+            return None
 
-        for d in descriptors:
-            limit = self.limits.max_seconds(d.content_type)
-            if limit is None:
-                continue
-            try:
-                seconds = self.media_probe.duration(
-                    self.file_storage.get_full_path(d.id), d.content_type
-                )
-            except KeyboardInterrupt:
-                raise
-            except Exception as e:
-                failed.append(
-                    FailureReport(
-                        item_id=d.id,
-                        kind=FailureKind.EMBEDDING_MODEL,
-                        value=f"can not read media ({e}): {d.original_name}",
-                    )
-                )
-                continue
+        path = self.file_storage.get_full_path(d.id)
+        try:
+            frames = (
+                self.media_probe.frames(path, d.content_type)
+                if frames_limit is not None
+                else None
+            )
+            seconds = (
+                self.media_probe.duration(path, d.content_type)
+                if seconds_limit is not None
+                else None
+            )
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            return FailureReport(
+                item_id=d.id,
+                kind=FailureKind.UNREADABLE,
+                value=f"{d.original_name}: can not read the file ({e})",
+            )
 
-            if seconds is not None and seconds > limit:
-                failed.append(
-                    FailureReport(
-                        item_id=d.id,
-                        kind=FailureKind.LIMIT_EXCEEDED,
-                        value=f"{d.original_name}: lasts {seconds:.0f} s, the limit is {limit} s",
-                    )
-                )
-        return failed
+        if frames_limit is not None and frames is not None and frames > frames_limit:
+            reason = f"has {frames} frames, the limit is {frames_limit}"
+        elif (
+            seconds_limit is not None
+            and seconds is not None
+            and seconds > seconds_limit
+        ):
+            reason = f"lasts {seconds:.0f} s, the limit is {seconds_limit} s"
+        else:
+            return None
+        return FailureReport(
+            item_id=d.id,
+            kind=FailureKind.LIMIT_EXCEEDED,
+            value=f"{d.original_name}: {reason}",
+        )
 
     def _save_to_vector_storage(
         self, descriptors: list[FileDescriptor], msgs: list[SaveMessage]
     ) -> list[FailureReport]:
-        failed = self._check_duration(descriptors)
-        rejected = {x.item_id for x in failed}
+        failed: list[FailureReport] = []
         pairs: list[tuple[FileDescriptor, SaveMessage]] = []
 
         # One report for a file even when both embeddings are wrong, so rollback gets its id once
         for d, msg in zip(descriptors, msgs):
-            if d.id in rejected:
-                continue
             wrong = [
                 field
                 for (field, value) in (
@@ -430,6 +442,7 @@ class DocumentProcessor:
 class FailureKind(Enum):
     FILE_STORAGE = "File storage"
     THUMBNAIL = "Thumbnail"
+    UNREADABLE = "Unreadable file"
     EMBEDDING_MODEL = "Embedding model"
     VECTOR_STORAGE = "Vector storage"
     LIMIT_EXCEEDED = "Limit exceeded"

@@ -139,6 +139,8 @@ message SaveFailure {
         LIMIT_EXCEEDED = 6;
         // The file came with ready embeddings from a user who may not send them
         FORBIDDEN = 7;
+        // The file can not be read to check its length: it is damaged or not what its type says
+        UNREADABLE = 8;
     }
 
     Kind kind = 1;
@@ -207,6 +209,7 @@ message DownloadResponse {
 
 // GetThumbnail
 message ThumbnailResponse {
+    // image/jpeg, or image/webp for a GIF of several frames
     string content_type = 1;
     bytes data = 2;
 }
