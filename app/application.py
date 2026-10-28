@@ -26,6 +26,7 @@ class Application:
         self.embedding_provider: EmbeddingProvider = embedding_provider
         self.storage: Storage = storage
         self.file_storage: FileStorage = file_storage
+        self.thumbnail_generator: ThumbnailGenerator = thumbnail_generator
         self.document_processor = DocumentProcessor(
             file_storage,
             embedding_provider,
@@ -43,9 +44,14 @@ class Application:
     def get_file(self, id: uuid.UUID) -> StoredFile:
         return self.file_storage.get(id)
 
-    # JPEG bytes, see THUMBNAIL_CONTENT_TYPE
+    # JPEG bytes, see THUMBNAIL_CONTENT_TYPE. Audio never has its own thumbnail and files
+    # stored before thumbnails appeared may lack one, both get a placeholder of their type
     def get_thumbnail(self, id: uuid.UUID) -> bytes:
-        return self.file_storage.get_thumbnail(id)
+        descriptor = self.file_storage.descriptor(id)
+        try:
+            return self.file_storage.get_thumbnail(id)
+        except FileNotFoundError:
+            return self.thumbnail_generator.placeholder(descriptor.content_type)
 
     def get_by_embeddings(
         self, embeddings: list[Embeddings], n_records: int

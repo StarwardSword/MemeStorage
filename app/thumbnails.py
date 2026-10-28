@@ -13,3 +13,10 @@ class ThumbnailGenerator(ABC):
         Raises when the file can not be decoded
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def placeholder(self, content_type: str) -> bytes:
+        """
+        Returns JPEG shown instead of the thumbnail when the file has none
+        """
+        raise NotImplementedError

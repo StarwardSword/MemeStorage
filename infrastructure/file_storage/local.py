@@ -91,6 +91,10 @@ class LocalFileStorage(FileStorage):
         return self.database.get_multiple(ids)
 
     @override
+    def all_descriptors(self) -> list[FileDescriptor]:
+        return self.database.get_all()
+
+    @override
     def remove(self, id: uuid.UUID):
         for filename in (Path(self.root, str(id)), self._thumbnail_path(id)):
             try:
@@ -103,9 +107,26 @@ class LocalFileStorage(FileStorage):
     def _thumbnail_path(self, id: uuid.UUID) -> Path:
         return Path(self.thumbnails_root, f"{id}.jpg")
 
+    # Written aside and moved in place, so a thumbnail requested while the backfill script
+    # writes it is either missing or whole
     @override
     def save_thumbnail(self, id: uuid.UUID, data: bytes) -> None:
-        self._thumbnail_path(id).write_bytes(data)
+        path = self._thumbnail_path(id)
+        # Server and the script are different processes and may write the same thumbnail
+        temporary = Path(self.thumbnails_root, f"{id}.{os.getpid()}.tmp")
+        try:
+            temporary.write_bytes(data)
+            os.replace(temporary, path)
+        except BaseException:
+            try:
+                os.remove(temporary)
+            except FileNotFoundError:
+                pass
+            raise
+
+    @override
+    def has_thumbnail(self, id: uuid.UUID) -> bool:
+        return self._thumbnail_path(id).is_file()
 
     @override
     def get_thumbnail(self, id: uuid.UUID) -> bytes:

@@ -366,7 +366,8 @@ def get_file_info(file_id: uuid.UUID, application: ApplicationDep) -> FileInfo:
     "/{file_id}/thumbnail",
     response_class=Response,
     summary="Get file thumbnail",
-    description="JPEG thumbnail of the file, the longest side is `thumbnails.size` from the server config.",
+    description="JPEG thumbnail of the file, the longest side is `thumbnails.size` from the server config. "
+    "Audio and files stored before thumbnails appeared get a placeholder of their type.",
     responses={
         status.HTTP_200_OK: {
             "description": "Thumbnail",

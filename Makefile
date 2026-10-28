@@ -1,4 +1,4 @@
-.PHONY: proto openapi format ffmpeg
+.PHONY: proto openapi format ffmpeg thumbnails
 
 proto: 
 	python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. --pyi_out=. ./api/grpc/proto/*.proto
@@ -10,6 +10,10 @@ openapi: proto
 ## FFmpeg DLLs for torchcodec, main.py picks them up from ./ffmpeg
 ffmpeg:
 	python fetch_ffmpeg.py
+
+## Thumbnails for files stored before thumbnails appeared, reads config.yaml
+thumbnails:
+	python build_thumbnails.py
 
 format:
 	ruff check . --select I --select F401 --fix

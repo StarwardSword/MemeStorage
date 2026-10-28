@@ -66,6 +66,21 @@ class SqliteDatabase:
             id=id, original_name=row["original_name"], content_type=row["content_type"]
         )
 
+    def get_all(self) -> list[FileDescriptor]:
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                "SELECT id, content_type, original_name FROM file_data"
+            ).fetchall()
+
+        return [
+            FileDescriptor(
+                id=uuid.UUID(row["id"]),
+                original_name=row["original_name"],
+                content_type=row["content_type"],
+            )
+            for row in rows
+        ]
+
     # Drops entire query if can't find any of specified items
     def get_multiple(self, ids: list[uuid.UUID]) -> list[FileDescriptor]:
         strs = [str(x) for x in ids]
