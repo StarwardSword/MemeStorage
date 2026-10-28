@@ -7,6 +7,7 @@ import grpc
 import numpy as np
 
 from app import (
+    THUMBNAIL_CONTENT_TYPE,
     Application,
     FailureKind,
     FailureReport,
@@ -25,6 +26,7 @@ MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
 FAILURE_KINDS = {
     FailureKind.FILE_STORAGE: pb2.SaveFailure.FILE_STORAGE,
+    FailureKind.THUMBNAIL: pb2.SaveFailure.THUMBNAIL,
     FailureKind.EMBEDDING_MODEL: pb2.SaveFailure.EMBEDDING_MODEL,
     FailureKind.VECTOR_STORAGE: pb2.SaveFailure.VECTOR_STORAGE,
 }
@@ -190,15 +192,19 @@ class MemeStorageService(service_pb2_grpc.MemeStorageServicer):
             failed=rejected + [failure_to_proto(x) for x in failed]
         )
 
-    def GetFile(
-        self, request: pb2.UUIDRequest, context: grpc.ServicerContext
-    ) -> Iterator[pb2.DownloadResponse]:
+    @staticmethod
+    def _file_id(request: pb2.UUIDRequest, context: grpc.ServicerContext) -> uuid.UUID:
         try:
-            file_id = uuid.UUID(request.uuid)
+            return uuid.UUID(request.uuid)
         except ValueError:
             context.abort(
                 grpc.StatusCode.INVALID_ARGUMENT, f"invalid uuid: {request.uuid!r}"
             )
+
+    def GetFile(
+        self, request: pb2.UUIDRequest, context: grpc.ServicerContext
+    ) -> Iterator[pb2.DownloadResponse]:
+        file_id = MemeStorageService._file_id(request, context)
 
         try:
             res = self.app.get_file(file_id)
@@ -216,6 +222,20 @@ class MemeStorageService(service_pb2_grpc.MemeStorageServicer):
 
         for b in res.data:
             yield pb2.DownloadResponse(chunk=b)
+
+    def GetThumbnail(
+        self, request: pb2.UUIDRequest, context: grpc.ServicerContext
+    ) -> pb2.ThumbnailResponse:
+        file_id = MemeStorageService._file_id(request, context)
+
+        try:
+            thumbnail = self.app.get_thumbnail(file_id)
+        except FileNotFoundError:
+            context.abort(grpc.StatusCode.NOT_FOUND, f"file not found: {file_id}")
+
+        return pb2.ThumbnailResponse(
+            content_type=THUMBNAIL_CONTENT_TYPE, data=thumbnail
+        )
 
     @staticmethod
     def _multiple_to_proto(items: list[list[FileDescriptor]]) -> pb2.MultipleIdResponse:

@@ -37,7 +37,35 @@ class FileStorage(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def all_descriptors(self) -> list[FileDescriptor]:
+        """
+        Returns descriptors of every stored file
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def remove(self, id: uuid.UUID) -> None:
+        """
+        Removes the file together with its thumbnail
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_thumbnail(self, id: uuid.UUID, data: bytes) -> None:
+        """
+        Readers never see a partly written thumbnail
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def has_thumbnail(self, id: uuid.UUID) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_thumbnail(self, id: uuid.UUID) -> bytes:
+        """
+        Raises FileNotFoundError when the file has no thumbnail
+        """
         raise NotImplementedError
 
     @abstractmethod

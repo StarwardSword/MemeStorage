@@ -84,14 +84,15 @@ class EmbeddingSearchRequest(BaseModel):
 
 
 SaveFailureKind = Literal[
-    "unsupported_type", "file_storage", "embedding_model", "vector_storage"
+    "unsupported_type", "file_storage", "thumbnail", "embedding_model", "vector_storage"
 ]
 
 
 class SaveFailure(BaseModel):
     kind: SaveFailureKind = Field(
         description="Stage that failed. `unsupported_type`: the file is not an image, video or audio "
-        "and was not passed to the application; `embedding_model` includes a wrong embedding dimension"
+        "and was not passed to the application; `thumbnail`: the file could not be decoded to build its thumbnail; "
+        "`embedding_model` includes a wrong embedding dimension"
     )
     message: str = Field(
         description="Usually holds the file name, but not always: "

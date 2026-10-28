@@ -11,6 +11,7 @@ chroma:
 
 files:
   root: "./.runtime/files/"
+  thumbnails_root: "./.runtime/thumbnails/"
   sqlite_connection_string: "./.runtime/sqlite.db"
   
 grpc:

@@ -16,6 +16,7 @@ from infrastructure import (
     GemmaEmbeddings,
     LocalFileStorage,
     OnnxEmbeddings,
+    PillowThumbnailGenerator,
 )
 
 GRPC_STOP_GRACE = 5
@@ -36,6 +37,7 @@ app = Application(
     embedding_provider=embeddings,
     storage=db,
     file_storage=files,
+    thumbnail_generator=PillowThumbnailGenerator(config.thumbnails),
     configuration=config.app,
 )
 

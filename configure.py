@@ -13,6 +13,7 @@ from infrastructure import (
     ChromaConfiguration,
     FileStorageConfiguration,
     GemmaConfiguration,
+    ThumbnailsConfiguration,
 )
 
 
@@ -28,6 +29,7 @@ class Configuration(BaseSettings):
     chroma: ChromaConfiguration
     files: FileStorageConfiguration
     app: ApplicationConfiguration
+    thumbnails: ThumbnailsConfiguration = ThumbnailsConfiguration()
     grpc: GRPCConfiguration | None = None
     http: HTTPConfiguration | None = None
 
