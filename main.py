@@ -15,6 +15,7 @@ from infrastructure import (
     ChromaStorage,
     GemmaEmbeddings,
     LocalFileStorage,
+    OnnxEmbeddings,
     PillowThumbnailGenerator,
 )
 
@@ -25,8 +26,9 @@ config = Configuration()
 print("Initializing file storage")
 files = LocalFileStorage(config.files)
 
-print("Initializing gemma embedding model")
-embeddings = GemmaEmbeddings(config=config.gemma, file_storage=files)
+print(f"Initializing gemma embedding model ({config.gemma.backend})")
+provider = OnnxEmbeddings if config.gemma.backend == "onnx" else GemmaEmbeddings
+embeddings = provider(config=config.gemma, file_storage=files)
 
 print("Initializing chromadb")
 db = ChromaStorage(config.chroma)
