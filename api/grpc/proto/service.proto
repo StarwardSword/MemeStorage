@@ -11,10 +11,11 @@ service MemeStorage {
     // Saved file uuid is not returned, the file is found by search.
     // INVALID_ARGUMENT: first message is not info or a later one is not data,
     //   content type is not image/*, video/* or audio/* or can not be guessed by file name,
-    //   embeddings or text_embeddings dimension does not match the model
+    //   embeddings or text_embeddings dimension does not match the model,
+    //   the file can not be decoded to build its thumbnail: it is damaged or not what its type says
     // Ready embeddings (embeddings, text_embeddings) are accepted only from users with allow_embeddings.
     // PERMISSION_DENIED: ready embeddings from a user who may not send them
-    // INTERNAL: file storage, thumbnail, embedding model or vector storage failed, nothing is stored
+    // INTERNAL: file storage, embedding model or vector storage failed, nothing is stored
     // RESOURCE_EXHAUSTED: the file is larger or longer than the server limit, nothing is stored
     rpc Save(stream SaveRequest) returns (SaveResponse);
 
@@ -26,7 +27,7 @@ service MemeStorage {
 
     // Like Save, but the file is only stored here and indexed in the background.
     // The answer holds a job uuid, which is also the uuid of the file: GetJob tells when it is searchable.
-    // Ready embeddings follow the same key rule as in Save and are indexed with the file.
+    // Ready embeddings follow the same rule as in Save and are indexed with the file.
     // INVALID_ARGUMENT, PERMISSION_DENIED: as in Save
     // RESOURCE_EXHAUSTED: the file is larger or longer than the server limit, or the queue is full
     rpc Submit(stream SaveRequest) returns (SubmitResponse);

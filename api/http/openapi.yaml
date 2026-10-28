@@ -39,7 +39,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '415':
-          description: File is not an image, video or audio
+          description: 'File is not an image, video or audio, or can not be decoded:
+            it is damaged or not what its type says'
           content:
             application/json:
               schema:
@@ -58,8 +59,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '500':
-          description: File storage, thumbnail, embedding model or vector storage
-            failed, nothing is stored
+          description: File storage, embedding model or vector storage failed, nothing
+            is stored
           content:
             application/json:
               schema:
@@ -299,7 +300,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '415':
-          description: File is not an image, video or audio
+          description: 'File is not an image, video or audio, or can not be decoded:
+            it is damaged or not what its type says'
           content:
             application/json:
               schema:

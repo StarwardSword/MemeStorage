@@ -75,10 +75,15 @@ def failure_message(report: FailureReport) -> str:
     return f"{report.kind.value}: {report.value}"
 
 
+# A file that is too big or too long, or can not be decoded, is the client's to fix
+CLIENT_FAILURES = {
+    FailureKind.LIMIT_EXCEEDED: grpc.StatusCode.RESOURCE_EXHAUSTED,
+    FailureKind.THUMBNAIL: grpc.StatusCode.INVALID_ARGUMENT,
+}
+
+
 def failure_code(report: FailureReport) -> grpc.StatusCode:
-    if report.kind is FailureKind.LIMIT_EXCEEDED:
-        return grpc.StatusCode.RESOURCE_EXHAUSTED
-    return grpc.StatusCode.INTERNAL
+    return CLIENT_FAILURES.get(report.kind, grpc.StatusCode.INTERNAL)
 
 
 def failure_to_proto(report: FailureReport) -> pb2.SaveFailure:

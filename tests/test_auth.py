@@ -23,7 +23,7 @@ from infrastructure.activity import SqliteActivityStore
 from infrastructure.file_storage import Configuration as FilesConfiguration
 from infrastructure.file_storage import LocalFileStorage
 
-from .fakes import ADMIN_TOKEN, make_app, message
+from .fakes import ADMIN_TOKEN, BrokenThumbnails, make_app, message
 
 
 def local_files(directory):
@@ -431,6 +431,53 @@ class HttpTest(unittest.TestCase):
             "/admin/activity/events?action=search_files", headers=a
         ).json()
         self.assertEqual([e["detail"] for e in events], ["sad cat"])
+
+
+class DamagedFileTest(unittest.TestCase):
+    def test_a_file_that_can_not_be_decoded_is_the_clients_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            app = make_app(d, files=local_files(d), thumbnails=BrokenThumbnails())
+            client = TestClient(create_app(app, HttpConfiguration()))
+            _, token = app.create_user("anna", False)
+            auth = {"Authorization": f"Bearer {token}"}
+            before = len(app.list_files(None, 10, 0))
+
+            for url in ("/files", "/jobs"):
+                r = client.post(
+                    url, files={"file": ("bad.png", b"junk", "image/png")}, headers=auth
+                )
+                self.assertEqual(r.status_code, 415, url)
+                self.assertTrue(r.json()["detail"].startswith("Thumbnail:"))
+
+            # Nothing stays behind, and a refused job is not queued
+            self.assertEqual(len(app.list_files(None, 10, 0)), before)
+            self.assertEqual(app.jobs.active_count(), 0)
+
+            # A batch reports it per file and does not fail
+            r = client.post(
+                "/files/batch",
+                files=[("files", ("bad.png", b"junk", "image/png"))],
+                headers=auth,
+            )
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual([f["kind"] for f in r.json()["failed"]], ["thumbnail"])
+
+    def test_grpc_codes_follow_the_same_rule(self):
+        import grpc
+
+        from api.grpc.service import failure_code
+        from app import FailureKind, FailureReport
+
+        def code(kind):
+            return failure_code(
+                FailureReport(item_id=uuid.uuid7(), kind=kind, value="x")
+            )
+
+        self.assertEqual(code(FailureKind.THUMBNAIL), grpc.StatusCode.INVALID_ARGUMENT)
+        self.assertEqual(
+            code(FailureKind.LIMIT_EXCEEDED), grpc.StatusCode.RESOURCE_EXHAUSTED
+        )
+        self.assertEqual(code(FailureKind.VECTOR_STORAGE), grpc.StatusCode.INTERNAL)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,11 @@ class NoThumbnails(ThumbnailGenerator):
         return b""
 
 
+class BrokenThumbnails(NoThumbnails):
+    def generate(self, source, content_type):
+        raise ValueError("can not decode")
+
+
 class FakeFiles:
     def __init__(self, delay=0.0):
         self.stored = {}
@@ -70,14 +75,16 @@ def message(name, size, content_type="image/png", **fields):
     )
 
 
-def make_app(directory, files=None, activity=False, **limits) -> Application:
+def make_app(
+    directory, files=None, activity=False, thumbnails=None, **limits
+) -> Application:
     """Application on real SQLite stores in directory, without a model"""
     db = str(Path(directory, "app.db"))
     return Application(
         embedding_provider=None,
         storage=NoStorage(),
         file_storage=files or FakeFiles(delay=0.05),
-        thumbnail_generator=NoThumbnails(),
+        thumbnail_generator=thumbnails or NoThumbnails(),
         configuration=ApplicationConfiguration(save_strategy="safe"),
         jobs=SqliteJobStore(db),
         users=SqliteUserStore(db),

@@ -1,3 +1,4 @@
+import logging
 import uuid
 from collections.abc import Callable
 from enum import Enum
@@ -17,6 +18,8 @@ from .limits import LimitExceededError, Limits, limited
 from .media import MediaProbe
 from .storage import Record, Storage
 from .thumbnails import ThumbnailGenerator
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -247,6 +250,8 @@ class DocumentProcessor:
             except KeyboardInterrupt:
                 raise
             except Exception:
+                # The client gets only the file name, what went wrong stays in the log
+                logger.warning("thumbnail of %s failed", original_name, exc_info=True)
                 # Removed here and not by the caller: an async upload stops after this stage
                 self.file_storage.remove(id)
                 fails.append(

@@ -152,14 +152,17 @@ def wrong_embeddings(field: str) -> RequestValidationError:
     )
 
 
-# Wrong requests are checked before saving, so what the application reports is a server failure,
-# except for the limits that only the application can check
+# What only the application can find out and the client can fix: a file that is too big or too long,
+# or one that can not be decoded. Wrong requests are checked before saving, so the rest is a server failure.
+# 415 and not 422 for a damaged file: the detail of 422 is a list of field errors, clients parse it so
+CLIENT_FAILURES = {
+    FailureKind.LIMIT_EXCEEDED: status.HTTP_413_CONTENT_TOO_LARGE,
+    FailureKind.THUMBNAIL: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+}
+
+
 def save_failed(report: FailureReport) -> HTTPException:
-    code = (
-        status.HTTP_413_CONTENT_TOO_LARGE
-        if report.kind is FailureKind.LIMIT_EXCEEDED
-        else status.HTTP_500_INTERNAL_SERVER_ERROR
-    )
+    code = CLIENT_FAILURES.get(report.kind, status.HTTP_500_INTERNAL_SERVER_ERROR)
     return HTTPException(code, f"{report.kind.value}: {report.value}")
 
 
@@ -313,13 +316,13 @@ files = APIRouter(
         },
         status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {
             "model": Error,
-            "description": "File is not an image, video or audio",
+            "description": "File is not an image, video or audio, or can not be decoded: it is damaged or not what its type says",
         },
         **EMBEDDINGS_FORBIDDEN,
         **TOO_LARGE,
         status.HTTP_500_INTERNAL_SERVER_ERROR: {
             "model": Error,
-            "description": "File storage, thumbnail, embedding model or vector storage failed, nothing is stored",
+            "description": "File storage, embedding model or vector storage failed, nothing is stored",
         },
     },
 )
@@ -520,7 +523,7 @@ QUEUE_FULL: dict[int | str, dict[str, Any]] = {
         },
         status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {
             "model": Error,
-            "description": "File is not an image, video or audio",
+            "description": "File is not an image, video or audio, or can not be decoded: it is damaged or not what its type says",
         },
         **EMBEDDINGS_FORBIDDEN,
         **TOO_LARGE,
