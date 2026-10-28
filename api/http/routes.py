@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 
 from app import (
     Application,
@@ -46,6 +46,15 @@ from .schemas import (
 )
 
 CHUNK_SIZE = 64 * 1024
+# Stored files never change under their id, so clients and proxies may keep them forever
+IMMUTABLE = "public, max-age=31536000, immutable"
+
+
+class MediaResponse(FileResponse):
+    # Every chunk is a read in a worker thread, bigger chunks mean fewer of them
+    chunk_size = 1024 * 1024
+
+
 MEDIA_PREFIXES = ("image/", "video/", "audio/")
 # Sent by browsers and curl when they do not know the type, server guesses it by file name then
 GENERIC_CONTENT_TYPES = ("", "application/octet-stream")
@@ -281,9 +290,9 @@ def save_files(
 
 @files.get(
     "/{file_id}",
-    response_class=StreamingResponse,
+    response_class=FileResponse,
     summary="Download a file",
-    description="Streams file contents with its stored content type. "
+    description="Sends file contents with its stored content type, byte ranges are supported. "
     "`Content-Disposition` carries the original file name.",
     responses={
         status.HTTP_200_OK: {
@@ -312,20 +321,29 @@ def get_file(
             description="Send as attachment so browsers save the file instead of showing it"
         ),
     ] = False,
-) -> StreamingResponse:
+) -> FileResponse:
     try:
-        stored = application.get_file(file_id)
+        descriptor = application.file_storage.descriptor(file_id)
     except FileNotFoundError:
         raise file_not_found(file_id) from None
 
-    headers = {
-        "Content-Disposition": content_disposition(stored.original_name, download)
-    }
-    if stored.size is not None:
-        headers["Content-Length"] = str(stored.size)
+    path = application.file_storage.get_full_path(file_id)
+    if not path.is_file():
+        raise file_not_found(file_id)
 
-    return StreamingResponse(
-        stored.data, media_type=stored.content_type, headers=headers
+    # Content-Length, ETag and byte ranges are added by the response itself
+    return MediaResponse(
+        path,
+        media_type=descriptor.content_type,
+        headers={
+            "Content-Disposition": content_disposition(
+                descriptor.original_name, download
+            ),
+            "Cache-Control": IMMUTABLE,
+            # Content type is chosen by the uploader, an SVG must not run scripts on this origin
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox",
+        },
     )
 
 

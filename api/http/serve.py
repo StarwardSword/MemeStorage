@@ -42,6 +42,12 @@ def create_app(app: Application, config: Configuration) -> FastAPI:
 # Blocks until the server is stopped
 def serve(app: Application, config: Configuration) -> None:
     server = uvicorn.Server(
-        uvicorn.Config(create_app(app, config), host=config.host, port=config.port)
+        uvicorn.Config(
+            create_app(app, config),
+            host=config.host,
+            port=config.port,
+            # Every request would cost a log write, and the files are fetched one by one
+            access_log=False,
+        )
     )
     server.run()

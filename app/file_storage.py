@@ -34,7 +34,7 @@ class FileStorage(ABC):
         """
         Returns a list of file descriptors ordered by input ids
         """
-        raise
+        raise NotImplementedError
 
     @abstractmethod
     def remove(self, id: uuid.UUID) -> None:
