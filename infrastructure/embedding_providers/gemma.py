@@ -1,5 +1,6 @@
 import ctypes
 import gc
+import logging
 import sys
 from collections import OrderedDict
 from threading import Lock, Semaphore, Timer
@@ -19,6 +20,8 @@ from app import (
 )
 
 from .configuration import Configuration
+
+logger = logging.getLogger(__name__)
 
 MODEL_NAME = "google/embeddinggemma-2"
 # Known up front, so startup does not have to load the model to measure it
@@ -72,9 +75,12 @@ def release_memory_to_os() -> None:
     gc.collect()
     if sys.platform.startswith("linux"):
         try:
-            ctypes.CDLL("libc.so.6").malloc_trim(0)
-        except OSError:
-            pass
+            released = ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except OSError as e:
+            # Not glibc (musl), memory stays in the process but nothing else breaks
+            logger.warning("malloc_trim is not available: %s", e)
+        else:
+            logger.debug("malloc_trim returned memory to the OS: %s", bool(released))
 
 
 class GemmaEmbeddings(EmbeddingProvider):
