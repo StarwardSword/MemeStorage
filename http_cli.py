@@ -4,9 +4,9 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 import uuid
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 from email.message import Message
@@ -54,7 +54,9 @@ def normalize_server(server: str) -> str:
 
 def make_client(server: str, token: str):
     if httpx is None:
-        raise ApiError("HTTP client dependency missing; install it with: pip install httpx")
+        raise ApiError(
+            "HTTP client dependency missing; install it with: pip install httpx"
+        )
     try:
         base_url = normalize_server(server)
     except ValueError as e:
@@ -149,8 +151,13 @@ class LocalModel:
 
         try:
             import yaml
+
             from app import FileDescriptor
-            from infrastructure import GemmaConfiguration, GemmaEmbeddings, OnnxEmbeddings
+            from infrastructure import (
+                GemmaConfiguration,
+                GemmaEmbeddings,
+                OnnxEmbeddings,
+            )
         except ImportError as e:
             raise ModelConfigError(
                 f"could not import the project's embedding dependencies: {e}. "
@@ -180,7 +187,9 @@ class LocalModel:
     def text(self, description: str) -> list[float]:
         return self._provider.document([description])[0].tolist()
 
-    def files(self, paths: list[Path]) -> tuple[dict[Path, list[float]], dict[Path, str]]:
+    def files(
+        self, paths: list[Path]
+    ) -> tuple[dict[Path, list[float]], dict[Path, str]]:
         items: dict[Path, Any] = {}
         for path in paths:
             item_id = uuid.uuid4()
@@ -196,7 +205,9 @@ class LocalModel:
         try:
             try:
                 encoded = self._provider.document(list(items.values()))
-                done = {path: embedding.tolist() for path, embedding in zip(paths, encoded)}
+                done = {
+                    path: embedding.tolist() for path, embedding in zip(paths, encoded)
+                }
             except Exception:
                 # A malformed file can fail a whole embedding batch; retry files individually.
                 for path, item in items.items():
@@ -308,7 +319,9 @@ def upload(
         try:
             text_embedding = model.text(description)
         except Exception as e:
-            print(f"FAIL  description embedding: {type(e).__name__}: {e}", file=sys.stderr)
+            print(
+                f"FAIL  description embedding: {type(e).__name__}: {e}", file=sys.stderr
+            )
             return 1
 
     groups = batches(media, batch_size)
@@ -316,9 +329,15 @@ def upload(
 
     def process_group(group: list[Path]) -> dict[str, Any]:
         if stop.is_set():
-            return {"uploaded": 0, "failed": 0, "skipped": len(group), "lines": [
-                ("SKIP", f"{path}: stopped after a previous fatal error") for path in group
-            ]}
+            return {
+                "uploaded": 0,
+                "failed": 0,
+                "skipped": len(group),
+                "lines": [
+                    ("SKIP", f"{path}: stopped after a previous fatal error")
+                    for path in group
+                ],
+            }
 
         lines: list[tuple[str, str]] = []
         group_uploaded = 0
@@ -334,8 +353,10 @@ def upload(
                 if is_fatal_api_error(e):
                     stop.set()
                 return {
-                    "uploaded": group_uploaded, "failed": group_failed,
-                    "skipped": group_skipped, "lines": lines,
+                    "uploaded": group_uploaded,
+                    "failed": group_failed,
+                    "skipped": group_skipped,
+                    "lines": lines,
                 }
 
             if not group_failures:
@@ -349,14 +370,18 @@ def upload(
                 failure_count = min(len(group), len(group_failures))
                 group_failed += failure_count
                 group_uploaded += max(0, len(group) - failure_count)
-                lines.append((
-                    "PART",
-                    f"batch of {len(group)} file(s): API reported {len(group_failures)} "
-                    "failure(s); individual filenames may be unavailable",
-                ))
+                lines.append(
+                    (
+                        "PART",
+                        f"batch of {len(group)} file(s): API reported {len(group_failures)} "
+                        "failure(s); individual filenames may be unavailable",
+                    )
+                )
             return {
-                "uploaded": group_uploaded, "failed": group_failed,
-                "skipped": group_skipped, "lines": lines,
+                "uploaded": group_uploaded,
+                "failed": group_failed,
+                "skipped": group_skipped,
+                "lines": lines,
             }
 
         embeddings: dict[Path, list[float]] = {}
@@ -373,14 +398,20 @@ def upload(
                         embeddings.update(single)
                         unembedded.update(single_failed)
                     except Exception as single_error:
-                        unembedded[path] = f"{type(single_error).__name__}: {single_error}"
+                        unembedded[path] = (
+                            f"{type(single_error).__name__}: {single_error}"
+                        )
                 if not embeddings and not unembedded:
-                    unembedded.update({path: f"{type(e).__name__}: {e}" for path in group})
+                    unembedded.update(
+                        {path: f"{type(e).__name__}: {e}" for path in group}
+                    )
 
         if model is not None:
             for path in group:
                 if path not in embeddings and path not in unembedded:
-                    unembedded[path] = "embedding provider returned no vector for this file"
+                    unembedded[path] = (
+                        "embedding provider returned no vector for this file"
+                    )
 
         for path, reason in unembedded.items():
             lines.append(("FAIL", f"{path}: local model: {reason}"))
@@ -391,7 +422,10 @@ def upload(
             if stop.is_set():
                 remaining = sent[index:]
                 group_skipped += len(remaining)
-                lines.extend(("SKIP", f"{pending}: stopped after a previous fatal error") for pending in remaining)
+                lines.extend(
+                    ("SKIP", f"{pending}: stopped after a previous fatal error")
+                    for pending in remaining
+                )
                 break
             try:
                 upload_single(
@@ -408,15 +442,20 @@ def upload(
                     stop.set()
                     remaining = sent[index + 1 :]
                     group_skipped += len(remaining)
-                    lines.extend(("SKIP", f"{pending}: stopped after a previous fatal error") for pending in remaining)
+                    lines.extend(
+                        ("SKIP", f"{pending}: stopped after a previous fatal error")
+                        for pending in remaining
+                    )
                     break
             else:
                 lines.append(("OK", str(path)))
                 group_uploaded += 1
 
         return {
-            "uploaded": group_uploaded, "failed": group_failed,
-            "skipped": group_skipped, "lines": lines,
+            "uploaded": group_uploaded,
+            "failed": group_failed,
+            "skipped": group_skipped,
+            "lines": lines,
         }
 
     uploaded = failed = not_sent = 0
@@ -429,7 +468,10 @@ def upload(
             try:
                 result = future.result()
             except Exception as e:
-                print(f"FAIL  batch ({len(group)} file(s)): {type(e).__name__}: {e}", file=sys.stderr)
+                print(
+                    f"FAIL  batch ({len(group)} file(s)): {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
                 failed += len(group)
                 continue
             for level, line in result["lines"]:
@@ -469,7 +511,9 @@ def filename_from_response(response: Any, fallback: str) -> str:
 
 
 def download_one(client: Any, file_id: str, output: Path) -> tuple[Path, str, int]:
-    with client.stream("GET", f"/files/{quote(file_id, safe='')}", params={"download": "true"}) as response:
+    with client.stream(
+        "GET", f"/files/{quote(file_id, safe='')}", params={"download": "true"}
+    ) as response:
         check_response(response)
         target = unique_path(output, filename_from_response(response, f"{file_id}.bin"))
         partial = target.with_name(target.name + ".part")
@@ -504,7 +548,9 @@ def download_all(client: Any, ids: list[str], output: Path) -> int:
 
 
 def search(client: Any, query: str, count: int) -> list[dict[str, Any]]:
-    response = check_response(client.get("/search", params={"q": query, "count": count}))
+    response = check_response(
+        client.get("/search", params={"q": query, "count": count})
+    )
     result = response.json()
     items = result.get("items", []) if isinstance(result, dict) else []
     return items if isinstance(items, list) else []
@@ -574,10 +620,20 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
         print("  (nothing)")
         return
     widths = [max(len(row[i]) for row in [headers, *rows]) for i in range(len(headers))]
-    print("  " + "  ".join(value.ljust(width) for value, width in zip(headers, widths)).rstrip())
+    print(
+        "  "
+        + "  ".join(
+            value.ljust(width) for value, width in zip(headers, widths)
+        ).rstrip()
+    )
     print("  " + "  ".join("-" * width for width in widths).rstrip())
     for row in rows:
-        print("  " + "  ".join(value.ljust(width) for value, width in zip(row, widths)).rstrip())
+        print(
+            "  "
+            + "  ".join(
+                value.ljust(width) for value, width in zip(row, widths)
+            ).rstrip()
+        )
 
 
 def user_command(client: Any, args: argparse.Namespace) -> int:
@@ -619,7 +675,9 @@ def user_command(client: Any, args: argparse.Namespace) -> int:
             check_response(client.delete(f"/admin/users/{quote(user_id, safe='')}"))
             print(f"Deleted user {user_id}; its token has been revoked.")
         elif args.action == "token":
-            response = check_response(client.post(f"/admin/users/{quote(user_id, safe='')}/token"))
+            response = check_response(
+                client.post(f"/admin/users/{quote(user_id, safe='')}/token")
+            )
             result = response.json()
             if result.get("restored"):
                 print("The deleted user was restored.")
@@ -653,16 +711,21 @@ def stats_command(client: Any, days: int) -> int:
 
     print(f"Stored files: {stats.get('files', 0)}, {stats.get('bytes', 0)} bytes")
     rows = []
-    for user in sorted(stats.get("users", []), key=lambda item: -int(item.get("bytes", 0) or 0)):
+    for user in sorted(
+        stats.get("users", []), key=lambda item: -int(item.get("bytes", 0) or 0)
+    ):
         by_type = user.get("by_type", {}) or {}
+
         def typed(name: str) -> str:
             entry = by_type.get(name, {})
             if not entry:
                 return "-"
             return f"{entry.get('files', 0)} / {entry.get('bytes', 0)} B"
+
         rows.append(
             [
-                str(user.get("name") or "(no owner)") + (" (deleted)" if user.get("deleted") else ""),
+                str(user.get("name") or "(no owner)")
+                + (" (deleted)" if user.get("deleted") else ""),
                 str(user.get("files", 0)),
                 f"{user.get('bytes', 0)} B",
                 typed("image"),
@@ -671,11 +734,15 @@ def stats_command(client: Any, days: int) -> int:
                 format_time(user.get("last_upload")),
             ]
         )
-    print_table(["user", "files", "size", "images", "videos", "audio", "last upload"], rows)
+    print_table(
+        ["user", "files", "size", "images", "videos", "audio", "last upload"], rows
+    )
 
     since = time.time() - days * 86400
     try:
-        activity_response = check_response(client.get("/admin/activity/summary", params={"since": since}))
+        activity_response = check_response(
+            client.get("/admin/activity/summary", params={"since": since})
+        )
     except (ApiError, HTTP_CLIENT_ERROR) as e:
         print(f"\nActivity summary unavailable: {e}")
         return 0
@@ -691,15 +758,19 @@ def stats_command(client: Any, days: int) -> int:
     return 0
 
 
-def add_connection_options(parser: argparse.ArgumentParser, *, suppress: bool = False) -> None:
+def add_connection_options(
+    parser: argparse.ArgumentParser, *, suppress: bool = False
+) -> None:
     default: Any = argparse.SUPPRESS if suppress else DEFAULT_SERVER
     token_default: Any = argparse.SUPPRESS if suppress else os.environ.get(TOKEN_ENV)
     parser.add_argument(
-        "--server", default=default,
+        "--server",
+        default=default,
         help=f"HTTP API base URL (default: {DEFAULT_SERVER})",
     )
     parser.add_argument(
-        "--token", default=token_default,
+        "--token",
+        default=token_default,
         help=f"Bearer token (default: ${TOKEN_ENV}; avoids exposing it in process arguments)",
     )
 
@@ -711,24 +782,52 @@ def build_parser() -> argparse.ArgumentParser:
 
     upload_parser = commands.add_parser("upload", help="upload media files/folders")
     add_connection_options(upload_parser, suppress=True)
-    upload_parser.add_argument("paths", nargs="+", type=Path, help="files and/or folders")
-    upload_parser.add_argument("-d", "--description", default="", help="description for every file")
-    upload_parser.add_argument("-r", "--recursive", action="store_true", help="include subfolders")
-    upload_parser.add_argument("-j", "--jobs", type=positive_int, default=DEFAULT_JOBS,
-                               help=f"parallel upload groups (default: {DEFAULT_JOBS})")
-    upload_parser.add_argument("-b", "--batch-size", type=positive_int, default=DEFAULT_BATCH,
-                               help=f"files per batch (default: {DEFAULT_BATCH})")
-    upload_parser.add_argument("-e", "--embed", action="store_true",
-                               help="calculate file embeddings locally and send ready vectors")
-    upload_parser.add_argument("--model-config", type=Path, default=DEFAULT_MODEL_CONFIG,
-                               help=f"config.yaml with the gemma section (default: {DEFAULT_MODEL_CONFIG})")
+    upload_parser.add_argument(
+        "paths", nargs="+", type=Path, help="files and/or folders"
+    )
+    upload_parser.add_argument(
+        "-d", "--description", default="", help="description for every file"
+    )
+    upload_parser.add_argument(
+        "-r", "--recursive", action="store_true", help="include subfolders"
+    )
+    upload_parser.add_argument(
+        "-j",
+        "--jobs",
+        type=positive_int,
+        default=DEFAULT_JOBS,
+        help=f"parallel upload groups (default: {DEFAULT_JOBS})",
+    )
+    upload_parser.add_argument(
+        "-b",
+        "--batch-size",
+        type=positive_int,
+        default=DEFAULT_BATCH,
+        help=f"files per batch (default: {DEFAULT_BATCH})",
+    )
+    upload_parser.add_argument(
+        "-e",
+        "--embed",
+        action="store_true",
+        help="calculate file embeddings locally and send ready vectors",
+    )
+    upload_parser.add_argument(
+        "--model-config",
+        type=Path,
+        default=DEFAULT_MODEL_CONFIG,
+        help=f"config.yaml with the gemma section (default: {DEFAULT_MODEL_CONFIG})",
+    )
 
-    search_parser = commands.add_parser("search", help="search by text and print matching files")
+    search_parser = commands.add_parser(
+        "search", help="search by text and print matching files"
+    )
     add_connection_options(search_parser, suppress=True)
     search_parser.add_argument("query")
     search_parser.add_argument("-n", "--count", type=search_count, default=10)
 
-    get_parser = commands.add_parser("get", help="search by text and download matching files")
+    get_parser = commands.add_parser(
+        "get", help="search by text and download matching files"
+    )
     add_connection_options(get_parser, suppress=True)
     get_parser.add_argument("query")
     get_parser.add_argument("-o", "--output", type=Path, required=True)
@@ -746,32 +845,54 @@ def build_parser() -> argparse.ArgumentParser:
     health_parser = commands.add_parser("health", help="check whether the API is up")
     add_connection_options(health_parser, suppress=True)
 
-    user_parser = commands.add_parser("user", help="manage users (admin token required)")
+    user_parser = commands.add_parser(
+        "user", help="manage users (admin token required)"
+    )
     add_connection_options(user_parser, suppress=True)
     user_actions = user_parser.add_subparsers(dest="action", required=True)
 
-    create_parser = user_actions.add_parser("create", help="create user and print its token")
+    create_parser = user_actions.add_parser(
+        "create", help="create user and print its token"
+    )
     add_connection_options(create_parser, suppress=True)
     create_parser.add_argument("name")
-    create_parser.add_argument("--embeddings", action="store_true",
-                               help="allow this user to upload precomputed embeddings")
+    create_parser.add_argument(
+        "--embeddings",
+        action="store_true",
+        help="allow this user to upload precomputed embeddings",
+    )
 
-    list_parser = user_actions.add_parser("list", help="list users, including deleted users")
+    list_parser = user_actions.add_parser(
+        "list", help="list users, including deleted users"
+    )
     add_connection_options(list_parser, suppress=True)
-    for action, description in (("delete", "revoke a user's token"), ("token", "rotate a user's token")):
+    for action, description in (
+        ("delete", "revoke a user's token"),
+        ("token", "rotate a user's token"),
+    ):
         subparser = user_actions.add_parser(action, help=description)
         add_connection_options(subparser, suppress=True)
         subparser.add_argument("user", help="user UUID")
     set_parser = user_actions.add_parser("set", help="change user permissions")
     add_connection_options(set_parser, suppress=True)
     set_parser.add_argument("user", help="user UUID")
-    set_parser.add_argument("--embeddings", action=argparse.BooleanOptionalAction, required=True,
-                            help="whether this user may upload precomputed embeddings")
+    set_parser.add_argument(
+        "--embeddings",
+        action=argparse.BooleanOptionalAction,
+        required=True,
+        help="whether this user may upload precomputed embeddings",
+    )
 
-    stats_parser = commands.add_parser("stats", help="show stored file and activity statistics")
+    stats_parser = commands.add_parser(
+        "stats", help="show stored file and activity statistics"
+    )
     add_connection_options(stats_parser, suppress=True)
-    stats_parser.add_argument("--days", type=positive_int, default=7,
-                              help="activity period in days (default: 7)")
+    stats_parser.add_argument(
+        "--days",
+        type=positive_int,
+        default=7,
+        help="activity period in days (default: 7)",
+    )
     return parser
 
 
@@ -809,8 +930,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.command == "upload":
                 return upload(
-                    client, args.paths, args.description, args.recursive,
-                    args.jobs, args.batch_size, model,
+                    client,
+                    args.paths,
+                    args.description,
+                    args.recursive,
+                    args.jobs,
+                    args.batch_size,
+                    model,
                 )
             if args.command == "search":
                 return search_command(client, args.query, args.count)
