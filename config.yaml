@@ -1,6 +1,9 @@
 app:
   save_strategy: "safe"
 
+auth:
+  admin_token: "production_token_here"
+
 gemma:
   device: "cuda"
   dtype: "bfloat16"

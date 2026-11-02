@@ -8,7 +8,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from mimetypes import guess_type
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator, NamedTuple
 
 import grpc
 
@@ -20,10 +20,17 @@ CHUNK_SIZE = 64 * 1024
 TIMEOUT = 300
 DEFAULT_JOBS = 4
 DEFAULT_BATCH = 32
+DEFAULT_MODEL_CONFIG = Path("config.yaml")
 MEDIA_PREFIXES = ("image/", "video/", "audio/")
+# Same as in main.py: torchcodec looks for FFmpeg DLLs once, when it is imported
+FFMPEG_DIR = Path(__file__).parent / "ffmpeg"
 
 
 class ProtocolError(Exception):
+    pass
+
+
+class ModelConfigError(Exception):
     pass
 
 
@@ -86,10 +93,85 @@ def connect(
     return service_pb2_grpc.MemeStorageStub(channel)
 
 
+# --- local embeddings
+
+
+class LocalModel:
+    """The embedding model of the server run on this machine: files go out with ready embeddings,
+    so the server does not run its own model on them. Needs a user with allow_embeddings
+
+    Settings come from the gemma section of a server config. truncate_dim must be the same
+    as on the server, otherwise it refuses the vectors for their dimension
+    """
+
+    def __init__(self, config_path: Path) -> None:
+        # The model and its libraries are heavy, other commands never import them
+        if hasattr(os, "add_dll_directory") and FFMPEG_DIR.is_dir():
+            self._ffmpeg_dlls = os.add_dll_directory(str(FFMPEG_DIR))
+
+        import yaml
+
+        from app import FileDescriptor
+        from infrastructure import GemmaConfiguration, GemmaEmbeddings, OnnxEmbeddings
+
+        with open(config_path, encoding="utf-8") as f:
+            section = (yaml.safe_load(f) or {}).get("gemma")
+        if section is None:
+            raise ModelConfigError(f"no gemma section in {config_path}")
+        try:
+            config = GemmaConfiguration.model_validate(section)
+        except ValueError as e:
+            raise ModelConfigError(e) from None
+
+        self._descriptor = FileDescriptor
+        # The model reads a file by its id in the server storage, here an id stands for a local path
+        self._paths: dict[uuid.UUID, Path] = {}
+        provider = OnnxEmbeddings if config.backend == "onnx" else GemmaEmbeddings
+        self._provider = provider(config=config, file_storage=self)  # type: ignore[arg-type]
+
+    def get_full_path(self, id: uuid.UUID) -> Path:
+        return self._paths[id]
+
+    def text(self, description: str) -> list[float]:
+        return self._provider.document([description])[0].tolist()
+
+    # Returns embeddings of the files and why the rest could not be embedded.
+    # Called from the upload threads at once, the provider takes care of that like on the server
+    def files(
+        self, paths: list[Path]
+    ) -> tuple[dict[Path, list[float]], dict[Path, str]]:
+        items: dict[Path, Any] = {}
+        for path in paths:
+            id = uuid.uuid4()
+            self._paths[id] = path
+            items[path] = self._descriptor(
+                id=id, original_name=path.name, content_type=guess_type(path.name)[0]
+            )
+
+        done: dict[Path, list[float]] = {}
+        failed: dict[Path, str] = {}
+        try:
+            try:
+                embeddings = self._provider.document(list(items.values()))
+                done = {p: e.tolist() for p, e in zip(paths, embeddings)}
+            except Exception:
+                # One broken file fails the whole batch, then they are embedded one by one
+                for path, item in items.items():
+                    try:
+                        done[path] = self._provider.document([item])[0].tolist()
+                    except Exception as e:
+                        failed[path] = f"{type(e).__name__}: {e}"
+            return done, failed
+        finally:
+            for item in items.values():
+                del self._paths[item.id]
+
+
 # --- upload
 
 
 def collect(target: Path, recursive: bool) -> list[Path]:
+    """Collect files from one file or directory."""
     if target.is_file():
         return [target]
     if not target.is_dir():
@@ -99,6 +181,19 @@ def collect(target: Path, recursive: bool) -> list[Path]:
     return sorted(p for p in candidates if p.is_file())
 
 
+def collect_many(targets: list[Path], recursive: bool) -> list[Path]:
+    """Collect files from several files/directories, without sending duplicates."""
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for target in targets:
+        for path in collect(target, recursive):
+            identity = path.resolve()
+            if identity not in seen:
+                result.append(path)
+                seen.add(identity)
+    return result
+
+
 # Server stores the file before embedding it, so unsupported types would leave orphans there
 def is_media(path: Path) -> bool:
     content_type = guess_type(path.name)[0]
@@ -106,12 +201,19 @@ def is_media(path: Path) -> bool:
 
 
 def save_multiple_requests(
-    paths: list[Path], description: str
+    paths: list[Path],
+    description: str,
+    embeddings: dict[Path, list[float]] | None = None,
+    text_embeddings: list[float] | None = None,
 ) -> Iterator[service_pb2.SaveMultipleRequest]:
     for path in paths:
         info = service_pb2.SaveFileInfo(filename=path.name)
         if description:
             info.text_description = description
+        if embeddings is not None:
+            info.embeddings.value.extend(embeddings[path])
+        if text_embeddings is not None:
+            info.text_embeddings.value.extend(text_embeddings)
         yield service_pb2.SaveMultipleRequest(info=info)
 
         with open(path, "rb") as f:
@@ -127,17 +229,26 @@ def failure_kind(failure: service_pb2.SaveFailure) -> str:
     return service_pb2.SaveFailure.Kind.Name(failure.kind)
 
 
+class GroupResult(NamedTuple):
+    sent: list[Path]
+    # Files the local model could not embed and why, they are not sent
+    unembedded: dict[Path, str]
+    # Files the server did not save
+    failures: list[service_pb2.SaveFailure]
+
+
 def upload(
     stub: service_pb2_grpc.MemeStorageStub,
-    target: Path,
+    targets: list[Path],
     description: str,
     recursive: bool,
     jobs: int,
     batch_size: int,
+    model: LocalModel | None = None,
 ) -> int:
-    files = collect(target, recursive)
+    files = collect_many(targets, recursive)
     if not files:
-        print(f"No files in {target}")
+        print("No files found in the supplied paths")
         return 0
 
     media: list[Path] = []
@@ -149,31 +260,56 @@ def upload(
         print(f"SKIP  {path}: unsupported type ({guess_type(path.name)[0]})")
         skipped += 1
 
+    # The description is the same for every file, so it is embedded once
+    try:
+        # The description is shared by all files, so calculate its embedding once.
+        text_embeddings = (
+            model.text(description) if model is not None and description else None
+        )
+    except Exception as e:
+        print(
+            f"FAIL  local model could not embed the description: "
+            f"{type(e).__name__}: {e}"
+        )
+        return 1
+
     # Queued uploads check the flag instead of being cancelled: as_completed never sees futures
     # cancelled by executor.shutdown(cancel_futures=True) and would hang
     stop = threading.Event()
 
-    # Returns files the server did not save, None when the group was not sent
-    def upload_group(group: list[Path]) -> list[service_pb2.SaveFailure] | None:
+    # None when the group was not sent
+    def upload_group(group: list[Path]) -> GroupResult | None:
         if stop.is_set():
             return None
 
+        embeddings, unembedded = None, {}
+        if model is not None:
+            embeddings, unembedded = model.files(group)
+            # The model may have taken a while, the server could have said no meanwhile
+            if stop.is_set():
+                return None
+        sent = [p for p in group if p not in unembedded]
+        if not sent:
+            return GroupResult(sent, unembedded, [])
+
         response = stub.SaveMultiple(
-            save_multiple_requests(group, description), timeout=TIMEOUT * len(group)
+            save_multiple_requests(sent, description, embeddings, text_embeddings),
+            timeout=TIMEOUT * len(sent),
         )
-        return list(response.failed)
+        return GroupResult(sent, unembedded, list(response.failed))
 
     groups = batches(media, batch_size)
 
     # Channel is thread-safe, so every upload shares it; results are printed in completion order
     uploaded, failed, not_sent = 0, 0, 0
+    forbidden = False
     with ThreadPoolExecutor(max_workers=jobs) as executor:
         futures = {executor.submit(upload_group, group): group for group in groups}
         try:
             for future in as_completed(futures):
                 group = futures[future]
                 try:
-                    failures = future.result()
+                    result = future.result()
                 except grpc.RpcError as e:
                     for path in group:
                         print(f"FAIL  {path}: {e.code().name}: {e.details()}")
@@ -183,9 +319,22 @@ def upload(
                         stop.set()
                     continue
 
-                if failures is None:
+                if result is None:
                     not_sent += len(group)
                     continue
+
+                for path, reason in result.unembedded.items():
+                    print(f"FAIL  {path}: local model: {reason}")
+                failed += len(result.unembedded)
+                group, failures = result.sent, result.failures
+                if not group:
+                    continue
+
+                # Every next file would be refused the same way
+                if any(f.kind == service_pb2.SaveFailure.FORBIDDEN for f in failures):
+                    forbidden = True
+                    stop.set()
+
                 if not failures:
                     for path in group:
                         print(f"OK    {path}")
@@ -206,6 +355,11 @@ def upload(
             stop.set()
             raise
 
+    if forbidden:
+        print(
+            "\nThe server refused ready embeddings: the admin allows them with "
+            "`cli.py user set <name> --embeddings`"
+        )
     if len(files) > 1:
         print(
             f"\nUploaded: {uploaded}, skipped: {skipped}, failed: {failed}"
@@ -516,30 +670,46 @@ def positive_int(value: str) -> int:
     return n
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="MemeStorage gRPC client")
+def add_connection_arguments(
+    parser: argparse.ArgumentParser, *, suppress_defaults: bool = False
+) -> None:
+    """Add server/auth flags. Suppressed defaults preserve values parsed globally."""
+    default = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument(
         "--server",
-        default=DEFAULT_SERVER,
+        default=default if suppress_defaults else DEFAULT_SERVER,
         help=f"server address (default: {DEFAULT_SERVER})",
     )
     parser.add_argument(
         "--tls",
         action="store_true",
-        help="connect over TLS, for a server behind a reverse proxy",
+        default=default if suppress_defaults else False,
+        help="connect over TLS, for example when the server is behind a reverse proxy",
     )
     parser.add_argument(
         "--token",
-        default=os.environ.get(TOKEN_ENV),
-        help=f"token of a user, or the admin token (default: ${TOKEN_ENV}). "
-        "Prefer the variable, arguments are visible to other users of the machine",
+        default=default if suppress_defaults else os.environ.get(TOKEN_ENV),
+        help=f"user/admin token (default: ${TOKEN_ENV}); prefer the environment variable",
     )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="MemeStorage gRPC client")
+    add_connection_arguments(parser)
     commands = parser.add_subparsers(dest="command", required=True)
 
     upload_cmd = commands.add_parser(
-        "upload", help="upload a file or every media file in a directory"
+        "upload", help="upload media files or files from one or more directories"
     )
-    upload_cmd.add_argument("path", type=Path)
+    # Convenient for upload commands: these flags can appear before or after `upload`.
+    add_connection_arguments(upload_cmd, suppress_defaults=True)
+    upload_cmd.add_argument(
+        "paths",
+        type=Path,
+        nargs="+",
+        metavar="PATH",
+        help="file(s) and/or directory(ies) to upload",
+    )
     upload_cmd.add_argument(
         "-d",
         "--description",
@@ -562,6 +732,20 @@ def main() -> int:
         type=positive_int,
         default=DEFAULT_BATCH,
         help=f"files sent in one call (default: {DEFAULT_BATCH})",
+    )
+    upload_cmd.add_argument(
+        "-e",
+        "--embed",
+        action="store_true",
+        help="compute embeddings with the model on this machine and send them with the files; "
+        "the user needs the right to send ready embeddings",
+    )
+    upload_cmd.add_argument(
+        "--model-config",
+        type=Path,
+        default=DEFAULT_MODEL_CONFIG,
+        help="config whose gemma section sets up the model for --embed, truncate_dim "
+        f"must match the server (default: {DEFAULT_MODEL_CONFIG})",
     )
 
     get_cmd = commands.add_parser(
@@ -642,13 +826,15 @@ def main() -> int:
     try:
         match args.command:
             case "upload":
+                model = LocalModel(args.model_config) if args.embed else None
                 return upload(
                     stub,
-                    args.path,
+                    args.paths,
                     args.description,
                     args.recursive,
                     args.jobs,
                     args.batch_size,
+                    model,
                 )
             case "get":
                 return get(stub, args.query, args.output, args.count)
@@ -660,6 +846,9 @@ def main() -> int:
                 return download_all(stub, args.ids, args.output)
     except FileNotFoundError as e:
         print(f"Not found: {e}")
+        return 1
+    except ModelConfigError as e:
+        print(f"Model config: {e}")
         return 1
     except grpc.RpcError as e:
         print(f"FAIL  {e.code().name}: {e.details()}")
